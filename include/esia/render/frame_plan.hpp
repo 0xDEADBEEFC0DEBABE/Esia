@@ -152,6 +152,8 @@ namespace esia::render
         int plannedCaptures = 0;
         // Build keys every capture (RenderOp::captureKey): the renderer sets it when it may reuse captures.
         bool keyCaptures = false;
+        // Drop shadows turn with a light (RenderParams::light): their offsets count as far in every direction.
+        bool lightShadows = false;
 
         void Build(const DrawData& dd, const TextureInfoFn& textureInfo, bool direct = false);
 

@@ -16,17 +16,18 @@ struct WgtDraw
 
 constant uint kEsiaFxFeatures_tmp [[function_constant(0)]];
 constant uint kEsiaFxFeatures = is_function_constant_defined(kEsiaFxFeatures_tmp) ? kEsiaFxFeatures_tmp : 4294967295u;
-constant uint _109 = (512u & kEsiaFxFeatures);
-constant uint _125 = (32768u & kEsiaFxFeatures);
-constant uint _139 = (2u & kEsiaFxFeatures);
-constant uint _155 = (4u & kEsiaFxFeatures);
-constant uint _160 = (256u & kEsiaFxFeatures);
-constant uint _189 = (8u & kEsiaFxFeatures);
-constant uint _203 = (65536u & kEsiaFxFeatures);
-constant uint _227 = (1024u & kEsiaFxFeatures);
-constant uint _253 = (8192u & kEsiaFxFeatures);
-constant uint _257 = (4u & kEsiaFxFeatures);
-constant uint _261 = (256u & kEsiaFxFeatures);
+constant uint _139 = (512u & kEsiaFxFeatures);
+constant uint _154 = (32768u & kEsiaFxFeatures);
+constant uint _165 = (131072u & kEsiaFxFeatures);
+constant uint _189 = (2u & kEsiaFxFeatures);
+constant uint _204 = (4u & kEsiaFxFeatures);
+constant uint _209 = (256u & kEsiaFxFeatures);
+constant uint _234 = (8u & kEsiaFxFeatures);
+constant uint _248 = (65536u & kEsiaFxFeatures);
+constant uint _272 = (1024u & kEsiaFxFeatures);
+constant uint _298 = (8192u & kEsiaFxFeatures);
+constant uint _302 = (4u & kEsiaFxFeatures);
+constant uint _306 = (256u & kEsiaFxFeatures);
 
 struct WgtFrame
 {
@@ -52,114 +53,127 @@ struct esia_main_out
     float4 gl_Position [[position]];
 };
 
-vertex esia_main_out esia_main(constant WgtFrame& _312 [[buffer(0)]], constant WgtDraw& _46 [[buffer(2)]], const device gFxData& gFxData_1 [[buffer(10)]], uint gl_VertexIndex [[vertex_id]], uint gl_InstanceIndex [[instance_id]])
+vertex esia_main_out esia_main(constant WgtFrame& _357 [[buffer(0)]], constant WgtDraw& _51 [[buffer(2)]], const device gFxData& gFxData_1 [[buffer(10)]], uint gl_VertexIndex [[vertex_id]], uint gl_InstanceIndex [[instance_id]])
 {
     esia_main_out out = {};
-    uint _494 = gl_InstanceIndex + uint(_46.gDrawInfo.x);
-    uint _712 = _494 * 24u;
-    uint _722 = (_494 * 24u) + 6u;
-    uint _730 = (_494 * 24u) + 8u;
-    uint _746 = (_494 * 24u) + 15u;
-    uint4 _509 = uint4(gFxData_1._data[(_494 * 24u) + 23u]);
-    uint _511 = _509.x;
-    float2 _909;
-    float2 _915;
-    if ((_511 & _109) != 0u)
+    uint _542 = gl_InstanceIndex + uint(_51.gDrawInfo.x);
+    uint _772 = _542 * 24u;
+    uint _782 = (_542 * 24u) + 6u;
+    uint _790 = (_542 * 24u) + 8u;
+    uint _806 = (_542 * 24u) + 15u;
+    uint4 _557 = uint4(gFxData_1._data[(_542 * 24u) + 23u]);
+    uint _559 = _557.x;
+    float2 _988;
+    float2 _990;
+    if ((_559 & _139) != 0u)
     {
-        _915 = fast::max(gFxData_1._data[_712].zw, gFxData_1._data[_746].zw);
-        _909 = fast::min(gFxData_1._data[_712].xy, gFxData_1._data[_746].xy);
+        _990 = fast::max(gFxData_1._data[_772].zw, gFxData_1._data[_806].zw);
+        _988 = fast::min(gFxData_1._data[_772].xy, gFxData_1._data[_806].xy);
     }
     else
     {
-        _915 = gFxData_1._data[_712].zw;
-        _909 = gFxData_1._data[_712].xy;
+        _990 = gFxData_1._data[_772].zw;
+        _988 = gFxData_1._data[_772].xy;
     }
-    float2 _908;
-    float2 _914;
-    if ((_511 & _125) != 0u)
+    float2 _987;
+    float2 _989;
+    if ((_559 & _154) != 0u)
     {
-        _914 = gFxData_1._data[_746].zw;
-        _908 = gFxData_1._data[_746].xy;
+        _989 = gFxData_1._data[_806].zw;
+        _987 = gFxData_1._data[_806].xy;
     }
     else
     {
-        _914 = _915;
-        _908 = _909;
+        _989 = _990;
+        _987 = _988;
     }
-    float _900;
-    if ((_511 & _139) != 0u)
+    float2 _999;
+    float2 _1004;
+    if ((_559 & _165) != 0u)
     {
-        _900 = fast::max(2.0, (gFxData_1._data[_722].x * gFxData_1._data[_722].y) + 2.0);
+        float2 _594 = abs(gFxData_1._data[(_542 * 24u) + 21u].xy) * 0.5;
+        _1004 = _989 + _594;
+        _999 = _987 - _594;
     }
     else
     {
-        _900 = 2.0;
+        _1004 = _989;
+        _999 = _987;
     }
-    float _901;
-    if (((_511 & _155) != 0u) && (!((_511 & _160) != 0u)))
+    float _991;
+    if ((_559 & _189) != 0u)
     {
-        _901 = fast::max(_900, (((gFxData_1._data[_730].x * 1.60000002384185791015625) + fast::max(gFxData_1._data[_730].y, 0.0)) + fast::max(abs(gFxData_1._data[_730].z), abs(gFxData_1._data[_730].w))) + 2.0);
+        _991 = fast::max(2.0, (gFxData_1._data[_782].x * gFxData_1._data[_782].y) + 2.0);
     }
     else
     {
-        _901 = _900;
+        _991 = 2.0;
     }
-    float _902;
-    if ((_511 & _189) != 0u)
+    float _992;
+    if (((_559 & _204) != 0u) && (!((_559 & _209) != 0u)))
     {
-        _902 = fast::max(_901, (gFxData_1._data[(_494 * 24u) + 10u].x * 1.7999999523162841796875) + 2.0);
+        _992 = fast::max(_991, (((gFxData_1._data[_790].x * 1.60000002384185791015625) + fast::max(gFxData_1._data[_790].y, 0.0)) + ((_51.gDrawInfo.w > 0.5) ? length(gFxData_1._data[_790].zw) : fast::max(abs(gFxData_1._data[_790].z), abs(gFxData_1._data[_790].w)))) + 2.0);
     }
     else
     {
-        _902 = _901;
+        _992 = _991;
     }
-    float _903;
-    if ((_511 & _203) != 0u)
+    float _993;
+    if ((_559 & _234) != 0u)
     {
-        _903 = fast::max(_902, (gFxData_1._data[(_494 * 24u) + 1u].w * 1.7999999523162841796875) + 2.0);
+        _993 = fast::max(_992, (gFxData_1._data[(_542 * 24u) + 10u].x * 1.7999999523162841796875) + 2.0);
     }
     else
     {
-        _903 = _902;
+        _993 = _992;
     }
-    float2 _605 = _908 - float2(_903);
-    float2 _609 = _914 + float2(_903);
-    float2 _916;
-    float2 _917;
-    if ((_511 & _227) != 0u)
+    float _994;
+    if ((_559 & _248) != 0u)
     {
-        uint _770 = (_494 * 24u) + 19u;
-        _917 = fast::min(_609, gFxData_1._data[_770].zw + float2(1.0));
-        _916 = fast::max(_605, gFxData_1._data[_770].xy - float2(1.0));
+        _994 = fast::max(_993, (gFxData_1._data[(_542 * 24u) + 1u].w * 1.7999999523162841796875) + 2.0);
     }
     else
     {
-        _917 = _609;
-        _916 = _605;
+        _994 = _993;
     }
-    float2 _918;
-    float2 _919;
-    if (((_511 & _253) != 0u) && (!(((_511 & _257) != 0u) && (!((_511 & _261) != 0u)))))
+    float2 _665 = _999 - float2(_994);
+    float2 _669 = _1004 + float2(_994);
+    float2 _1005;
+    float2 _1006;
+    if ((_559 & _272) != 0u)
     {
-        uint _778 = (_494 * 24u) + 22u;
-        _919 = fast::max(_916, gFxData_1._data[_778].xy - float2(1.0));
-        _918 = fast::min(_917, gFxData_1._data[_778].zw + float2(1.0));
+        uint _857 = (_542 * 24u) + 19u;
+        _1006 = fast::min(_669, gFxData_1._data[_857].zw + float2(1.0));
+        _1005 = fast::max(_665, gFxData_1._data[_857].xy - float2(1.0));
     }
     else
     {
-        _919 = _916;
-        _918 = _917;
+        _1006 = _669;
+        _1005 = _665;
     }
-    float2 _676 = float2(((gl_VertexIndex & 1u) != 0u) ? _918.x : _919.x, ((gl_VertexIndex & 2u) != 0u) ? _918.y : _919.y);
-    out.gl_Position = float4((_676 * _312.gXform.xy) + _312.gXform.zw, 0.0, 1.0);
-    out._entryPointOutput_local = _676;
-    out._entryPointOutput_instance = _494;
-    out._entryPointOutput_rect = gFxData_1._data[_712];
-    out._entryPointOutput_radii = gFxData_1._data[(_494 * 24u) + 1u];
-    out._entryPointOutput_fill0 = gFxData_1._data[(_494 * 24u) + 2u];
-    out._entryPointOutput_shape = gFxData_1._data[(_494 * 24u) + 14u];
-    out._entryPointOutput_misc = gFxData_1._data[(_494 * 24u) + 17u];
-    out._entryPointOutput_flags = _509;
+    float2 _1007;
+    float2 _1008;
+    if (((_559 & _298) != 0u) && (!(((_559 & _302) != 0u) && (!((_559 & _306) != 0u)))))
+    {
+        uint _865 = (_542 * 24u) + 22u;
+        _1008 = fast::max(_1005, gFxData_1._data[_865].xy - float2(1.0));
+        _1007 = fast::min(_1006, gFxData_1._data[_865].zw + float2(1.0));
+    }
+    else
+    {
+        _1008 = _1005;
+        _1007 = _1006;
+    }
+    float2 _736 = float2(((gl_VertexIndex & 1u) != 0u) ? _1007.x : _1008.x, ((gl_VertexIndex & 2u) != 0u) ? _1007.y : _1008.y);
+    out.gl_Position = float4((_736 * _357.gXform.xy) + _357.gXform.zw, 0.0, 1.0);
+    out._entryPointOutput_local = _736;
+    out._entryPointOutput_instance = _542;
+    out._entryPointOutput_rect = gFxData_1._data[_772];
+    out._entryPointOutput_radii = gFxData_1._data[(_542 * 24u) + 1u];
+    out._entryPointOutput_fill0 = gFxData_1._data[(_542 * 24u) + 2u];
+    out._entryPointOutput_shape = gFxData_1._data[(_542 * 24u) + 14u];
+    out._entryPointOutput_misc = gFxData_1._data[(_542 * 24u) + 17u];
+    out._entryPointOutput_flags = _557;
     return out;
 }
 

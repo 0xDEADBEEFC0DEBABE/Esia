@@ -130,7 +130,7 @@ is the executable reference: run the conformance suite with `--backend null --ou
 | `BeginPass({target, load})` / `EndPass()` | `Load` keeps the contents, `Clear` clears to `clearColor`, `DontCare` means nothing outside what the pass draws is ever read (pyramid levels, fresh glow layers: tilers need not load them). Viewport = whole target. **Nothing is bound at the start of a pass**; scissor = whole target. |
 | `SetPipeline(p)` | Its target format and samples match the pass target. |
 | `SetScissor(rect)` | Top-left pixels, inside the target, may be empty only if no draw follows. Bottom-left APIs convert: `y = height - rect.y1`. |
-| `SetConstants(slot, data, size)` | Frame (192 bytes), Pass (32), Draw (32); multiples of 16. Inline: each draw sees the latest values; version them (ring buffer, push / root constants, `setVertexBytes`). |
+| `SetConstants(slot, data, size)` | Frame (192 bytes), Pass (32), Draw (32: the edge fade, the first instance, the UI light); multiples of 16. Inline: each draw sees the latest values; version them (ring buffer, push / root constants, `setVertexBytes`). |
 | `SetTexture(slot, tex)` | t0..t7. Never the current pass target. Bind with the sampler the shader expects (section 4). |
 | `SetFxBuffer(buf)` | t7 as a structured / storage buffer (`FxStorage::Buffer`). |
 | `SetVertexBuffer` / `SetIndexBuffer` | The frame's buffers; indices are 32-bit. Without `baseVertex` they are rebased onto one merged vertex array; with it every draw list's are as the list wrote them (`DrawIndexedBase`). |

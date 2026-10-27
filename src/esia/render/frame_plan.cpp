@@ -33,18 +33,32 @@ namespace esia::render
             return r;
         }
 
+        // How far a drop shadow's offset reaches: along x or y as it is, or every way when a light turns it
+        float ShadowReach(const fx::Instance& in, bool lit)
+        {
+            return lit ? std::sqrt(in.shadowParams[2] * in.shadowParams[2] + in.shadowParams[3] * in.shadowParams[3])
+                       : std::max(std::fabs(in.shadowParams[2]), std::fabs(in.shadowParams[3]));
+        }
+
         // Must mirror the quad expansion in FxVS (esia_fx.hlsl).
-        void InstanceExtent(const fx::Instance& in, float out[4])
+        void InstanceExtent(const fx::Instance& in, float out[4], bool lit)
         {
             const std::uint32_t feat = in.flags[0];
             const Rect shape = ShapeBox(in);
             float x0 = shape.min.x, y0 = shape.min.y, x1 = shape.max.x, y1 = shape.max.y;
+            if (feat & fx::kMotion)   // the area the shape sweeps
+            {
+                const float mx = std::fabs(in.custom[0]) * 0.5f, my = std::fabs(in.custom[1]) * 0.5f;
+                x0 -= mx;
+                y0 -= my;
+                x1 += mx;
+                y1 += my;
+            }
             float pad = 2.0f;
             if (feat & fx::kStroke)
                 pad = std::max(pad, in.strokeParams[0] * in.strokeParams[1] + 2.0f);
             if ((feat & fx::kShadow) && !(feat & fx::kInnerShadow))
-                pad = std::max(pad, in.shadowParams[0] * 1.6f + std::max(in.shadowParams[1], 0.0f) +
-                                        std::max(std::fabs(in.shadowParams[2]), std::fabs(in.shadowParams[3])) + 2.0f);
+                pad = std::max(pad, in.shadowParams[0] * 1.6f + std::max(in.shadowParams[1], 0.0f) + ShadowReach(in, lit) + 2.0f);
             if (feat & fx::kGlow)
                 pad = std::max(pad, in.glowParams[0] * 1.8f + 2.0f);
             if (feat & fx::kLegible)
@@ -68,15 +82,16 @@ namespace esia::render
 
         // Distance beyond the shape where its shadow / glow still reaches a visible opacity (> 4%): past it the
         // tails vanish once seen through blurred glass (capture planning ignores them).
-        float InstanceCoreExtent(const fx::Instance& in)
+        float InstanceCoreExtent(const fx::Instance& in, bool lit)
         {
             const std::uint32_t feat = in.flags[0];
             float pad = 1.0f;
+            if (feat & fx::kMotion)
+                pad = std::max(pad, std::max(std::fabs(in.custom[0]), std::fabs(in.custom[1])) * 0.5f + 1.0f);
             if (feat & fx::kStroke)
                 pad = std::max(pad, in.strokeParams[0] * in.strokeParams[1] + 1.0f);
             if ((feat & fx::kShadow) && !(feat & fx::kInnerShadow) && in.shadow[3] > 0.04f)
-                pad = std::max(pad, in.shadowParams[0] * 0.5f + std::max(in.shadowParams[1], 0.0f) +
-                                        std::max(std::fabs(in.shadowParams[2]), std::fabs(in.shadowParams[3])));
+                pad = std::max(pad, in.shadowParams[0] * 0.5f + std::max(in.shadowParams[1], 0.0f) + ShadowReach(in, lit));
             if (feat & fx::kGlow)
             {
                 const float peak = in.glowParams[1] * in.glow[3];
@@ -93,11 +108,19 @@ namespace esia::render
         // drawn). Past it a shadow's tail changes a pixel by a few levels at most, which drawing a neighbouring label
         // before or after it does not show - and a label beside a button would otherwise split every row of a form
         // into a batch of shapes and a batch of text.
-        void InstanceJoinReach(const fx::Instance& in, float out[4])
+        void InstanceJoinReach(const fx::Instance& in, float out[4], bool lit)
         {
             const std::uint32_t feat = in.flags[0];
             const Rect shape = ShapeBox(in);
             float x0 = shape.min.x, y0 = shape.min.y, x1 = shape.max.x, y1 = shape.max.y;
+            if (feat & fx::kMotion)
+            {
+                const float mx = std::fabs(in.custom[0]) * 0.5f, my = std::fabs(in.custom[1]) * 0.5f;
+                x0 -= mx;
+                y0 -= my;
+                x1 += mx;
+                y1 += my;
+            }
             const float sx0 = x0, sy0 = y0, sx1 = x1, sy1 = y1;
             float pad = 1.0f;
             if (feat & fx::kStroke)
@@ -114,11 +137,13 @@ namespace esia::render
             y1 += pad;
             if ((feat & fx::kShadow) && !(feat & fx::kInnerShadow) && in.shadow[3] > 0.04f)
             {
+                // the shadow in its own box, offset the way it is drawn - any way when a light turns it
                 const float r = in.shadowParams[0] * 0.5f + std::max(in.shadowParams[1], 0.0f);
-                x0 = std::min(x0, sx0 + in.shadowParams[2] - r);
-                y0 = std::min(y0, sy0 + in.shadowParams[3] - r);
-                x1 = std::max(x1, sx1 + in.shadowParams[2] + r);
-                y1 = std::max(y1, sy1 + in.shadowParams[3] + r);
+                const float reach = lit ? ShadowReach(in, true) : 0.0f;
+                x0 = std::min(x0, sx0 + (lit ? -reach : in.shadowParams[2]) - r);
+                y0 = std::min(y0, sy0 + (lit ? -reach : in.shadowParams[3]) - r);
+                x1 = std::max(x1, sx1 + (lit ? reach : in.shadowParams[2]) + r);
+                y1 = std::max(y1, sy1 + (lit ? reach : in.shadowParams[3]) + r);
             }
             if (feat & fx::kMask)
             {
@@ -325,7 +350,7 @@ namespace esia::render
                     {
                         const fx::Instance& in = dl->FxInstances()[ii];
                         float e[4];
-                        InstanceExtent(in, e);
+                        InstanceExtent(in, e, lightShadows);
                         const PxRect full = map(e[0], e[1], e[2], e[3]);
                         const PxRect b = full.Intersect(clip);
                         if (b.Empty())
@@ -339,7 +364,7 @@ namespace esia::render
                         // Liquid glass shapes are tracked apart from other content: like SwiftUI's glass effect
                         // container, neighbouring glass shares one backdrop and only sees glass it sits on.
                         const bool glassShape = (in.flags[0] & fx::kGlass) && !(in.flags[0] & fx::kCustom);
-                        const PxRect core = glassShape ? PxRect{} : shapeR.Expand(InstanceCoreExtent(in) * map.scale.x).Intersect(full).Intersect(clip);
+                        const PxRect core = glassShape ? PxRect{} : shapeR.Expand(InstanceCoreExtent(in, lightShadows) * map.scale.x).Intersect(full).Intersect(clip);
                         const PxRect gShape = glassShape ? shapeR.Intersect(clip) : PxRect{};
                         const bool cut = glass || !clip.Contains(full);
                         PxRect gRegion, gCore, g0;
@@ -378,7 +403,7 @@ namespace esia::render
                         PxRect jr = b;
                         if (!glass)
                         {
-                            InstanceJoinReach(in, e);
+                            InstanceJoinReach(in, e, lightShadows);
                             jr = map(e[0], e[1], e[2], e[3]).Intersect(b);
                         }
                         int k = findJoin(jr, glass, [&](const RenderOp& o) {

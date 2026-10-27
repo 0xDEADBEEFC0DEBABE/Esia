@@ -117,6 +117,7 @@ namespace esia::render
         std::vector<KeptCapture> kept;
         bool reuseExact = false;
         int reuseFrames = 0;
+        float light[3] = {0, 0, 0};   // RenderParams::light in the Draw constants (gDrawInfo.yzw, esia_fx.hlsl)
 
         // this frame
         rhi::Texture target;
@@ -603,13 +604,13 @@ namespace esia::render
                 return GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied);
             // glyph shapes the full shader cannot draw (Caps::fullFxGlyphs): their variant, built at once - nothing
             // could stand in for it while it compiled
-            const bool glyphVariant = !caps.fullFxGlyphs && (features & fx::kGlyph);
+            const bool glyphVariant = !caps.fullFxGlyphs && (features & fx::kVariantOnlyFeatures);
             const rhi::Pipeline variant = GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied, 0, features, caps.asyncPipelines && !glyphVariant);
             const rhi::PipelineStatus status = variant ? dev.GetPipelineStatus(variant) : rhi::PipelineStatus::Failed;
             if (status == rhi::PipelineStatus::Ready)
                 return variant;
             // the full shader may not draw glyph shapes (Caps::fullFxGlyphs): such a batch waits for a variant
-            const bool fullDraws = caps.fullFxGlyphs || !(features & fx::kGlyph);
+            const bool fullDraws = caps.fullFxGlyphs || !(features & fx::kVariantOnlyFeatures);
             if (status == rhi::PipelineStatus::Failed)
             {
                 ++stats.fxFallbacks;
@@ -686,6 +687,7 @@ namespace esia::render
             DrawConstants dc{};
             std::memcpy(dc.fade, fade, sizeof(dc.fade));
             dc.info[0] = (float)firstInstance;
+            std::memcpy(dc.info + 1, light, sizeof(light));
             if (!drawSet || std::memcmp(&dc, &boundDraw, sizeof(dc)) != 0)
             {
                 dev.SetConstants(rhi::ConstantSlot::Draw, &dc, sizeof(dc));
@@ -1065,7 +1067,7 @@ namespace esia::render
             EnsureContentPass();
             // a shader specialized to the features this batch uses, where the backend builds variants (glyph shapes on
             // a device whose full shader has no glyph code: there too)
-            const bool glyphVariant = !caps.fullFxGlyphs && (op.features & fx::kGlyph);
+            const bool glyphVariant = !caps.fullFxGlyphs && (op.features & fx::kVariantOnlyFeatures);
             const std::uint32_t features = caps.fxFeatureVariants || glyphVariant ? op.features : 0u;
             rhi::Pipeline p = op.effect != 0 && caps.runtimeEffects ? GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied, op.effect, features)
                                                                     : rhi::Pipeline{};
@@ -1212,6 +1214,11 @@ namespace esia::render
             ApplyTextureChanges(registry);
             reuseExact = params.targetStatic;
             reuseFrames = std::max(0, params.backdropReuseFrames);
+            // the light: its point or direction, and 0 none / 1 a direction / 1 + its height for a point
+            light[0] = params.light.position.x;
+            light[1] = params.light.position.y;
+            light[2] = params.light.enabled ? 1.0f + std::max(params.light.height, 0.0f) : 0.0f;
+            plan.lightShadows = params.light.enabled;
             plan.keyCaptures = reuseExact || reuseFrames > 0;
             plan.Build(dd, [this](TextureId id, TextureInfo& out) {
                 auto it = textures.find(id);

@@ -197,6 +197,9 @@ off (4096 instruction slots). On the RTX 4080 SUPER `text_fields` passes on D3D9
 on D3D10 / 11 / 12. Their legibility halo (`fx::kLegible`) is left out of SM3's full shader too; `text_legible` passes
 on all four to the pixel.
 
+Motion blur (`fx::kMotion`) is left out of SM3's full FX shader too (`fx::kVariantOnlyFeatures`): moving shapes
+take their variant; `motion_blur` passes on all four to the pixel, `ui_light` within one level.
+
 Instanced quads (glyphs, flat tiles: `QuadVS`, the instance data after the FX instances) run on all four. On D3D9 the
 instance texture is now at most 4096 texels wide: with quads after an FX row the renderer uploaded a full row of
 12288 texels, whose 16384-texel system-memory surface NVIDIA's driver refused (E_FAIL), and the device then failed

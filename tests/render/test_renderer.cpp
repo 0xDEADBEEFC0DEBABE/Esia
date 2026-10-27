@@ -878,6 +878,51 @@ ESIA_TEST(Renderer, GlyphShapesTakeTheirVariantWhereTheFullShaderLacksThem)
     ESIA_CHECK(NoErrors(dev) && Lines(dev, "features=") == 0 && Lines(dev, "draw instanced") >= 1);
 }
 
+// Motion blur is code the full shader of a device like Direct3D 9 has no room for, as glyph shapes are: a moving
+// shape takes its variant at once.
+ESIA_TEST(Renderer, MovingShapesTakeTheirVariantWhereTheFullShaderLacksThem)
+{
+    Caps caps;
+    caps.fullFxGlyphs = false;
+    caps.fxFeatureVariants = false;
+    caps.asyncPipelines = true;
+    DrawList dl = MakeList();
+    Painter p(dl);
+    p.Rect(Rect(10, 10, 50, 50), Style().Fill(Color::White()));
+    p.Rect(Rect(100, 10, 150, 50), Style().Fill(Color::White()).MotionBlur(Vec2(12, 0)));
+    NullDevice dev(NullOptions{caps});
+    const Texture target = dev.CreateHostTarget(400, 300, Format::RGBA8_UNORM, true);
+    Renderer r(dev);
+    r.Render(Data({&dl}), nullptr, target);
+    ESIA_CHECK(NoErrors(dev));
+    // one batch of both: the variant with their features, built at once
+    ESIA_CHECK(Lines(dev, "features=0x20001") == 1 && Lines(dev, "background") == 0 && Lines(dev, "draw instanced") == 1);
+}
+
+// The UI light (RenderParams::light) reaches every draw in the Draw constants: x, y and 0 none / 1 a direction / 1 + the
+// height of a point; drop shadows then reach as far as their offset's length every way (the planner's bounds).
+ESIA_TEST(Renderer, TheUiLightIsInTheDrawConstants)
+{
+    Setup s;
+    DrawList dl = MakeList();
+    Painter(dl).Rect(Rect(100, 100, 160, 140), Style().Fill(Color::White()).Shadow(Color::Black(0.5f), 4, Vec2(16, 12)));
+    Renderer r(s.dev);
+    r.Render(Data({&dl}), nullptr, s.target);
+    ESIA_CHECK(Lines(s.dev, "constants draw: 0 0 0 0 | 0 0 0 0") == 1);
+    const PxRect unlit = r.Plan().ops[0].bounds;   // the offset reaching 16 along x or y ...
+    s.dev.ClearLog();
+    RenderParams lit;
+    lit.light = UiLight::Point(Vec2(130, 300), 80.0f);
+    r.Render(Data({&dl}), nullptr, s.target, lit);
+    ESIA_CHECK(NoErrors(s.dev) && Lines(s.dev, "constants draw: 0 0 0 0 | 0 130 300 81") == 1);
+    const PxRect turned = r.Plan().ops[0].bounds;   // ... or 20, its length, any way
+    ESIA_CHECK(turned.y0 == unlit.y0 - 4.0f && turned.y1 == unlit.y1 + 4.0f && turned.x0 == unlit.x0 - 4.0f);
+    s.dev.ClearLog();
+    lit.light = UiLight::Direction(Vec2(-1, 0));
+    r.Render(Data({&dl}), nullptr, s.target, lit);
+    ESIA_CHECK(Lines(s.dev, "constants draw: 0 0 0 0 | 0 -1 0 1") == 1);
+}
+
 ESIA_TEST(Renderer, VariantsCompilingInTheBackgroundDrawWithAReadyPipeline)
 {
     Caps caps;

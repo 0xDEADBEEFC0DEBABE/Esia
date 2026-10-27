@@ -41,7 +41,15 @@ namespace esia::fx
         // other tone (radii.z strength 0 .. 1, radii.w radius in UI units) - none where the contrast is ample. Reads
         // the captured backdrop, as glass does.
         kLegible     = 1u << 16,
+        // motion blur: the shape moves custom.xy (UI units) while the frame is shown - its edges are blurred along it,
+        // in closed form (the coverage ramp averaged over the distance the edge sweeps across each pixel). The custom
+        // row is a user effect's otherwise: an effect's shape is not blurred.
+        kMotion      = 1u << 17,
     };
+
+    // Features whose code the full FX shader of a device with rhi::Caps::fullFxGlyphs = false has no room for
+    // (Direct3D 9: SM3's registers): their batches always draw with a feature variant, built at once.
+    constexpr std::uint32_t kVariantOnlyFeatures = kGlyph | kLegible | kMotion;
 
     // Glyph: a glyph's distance field (MTSDF, text/distance_field.hpp) on the instance's texture - shape2 = the field's
     // extent (UI units: the quad), uvRect = its texels, radii.x / y = the multi-channel / true distance ranges (field

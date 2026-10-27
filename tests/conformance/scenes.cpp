@@ -438,7 +438,10 @@ namespace esia::conformance
                 under |= fx::kStroke;
             if (feat & fx::kLegible)
                 under |= fx::kLegible;
-            for (const std::uint32_t pass : {under, feat & ~under})
+            const std::uint32_t faces = feat & ~under;
+            if (under != 0)
+                under |= feat & fx::kMotion;   // blurred as the faces are
+            for (const std::uint32_t pass : {under, faces})
             {
                 if (pass == 0)
                     continue;
@@ -519,6 +522,53 @@ namespace esia::conformance
             // weight: thinner and bolder from the same fields
             FieldText(p, page, {0, 1}, Vec2(200, 190), 24, FieldMaterial(Color::Black()), -0.8f);
             FieldText(p, page, {0, 1}, Vec2(200, 225), 24, FieldMaterial(Color::Black()), 1.2f);
+        }
+
+        // Motion blur (fx::kMotion): shapes that move while the frame is shown beside the same shapes at rest - a
+        // capsule moving right, a circle on the diagonal, a stroked card down, glyph shapes left with their outline.
+        void MotionBlurScene(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl);
+            p.Rect(Rect(0, 0, 320, 240), Style().Fill(Color::Hex(0x1C1C1E)));
+            const Style capsule = Style().Fill(Color::Hex(0x0A84FF));
+            p.Capsule(Rect(16, 14, 116, 42), capsule);
+            p.Capsule(Rect(170, 14, 270, 42), Style(capsule).MotionBlur(Vec2(32, 0)));
+            const Style dot = Style().Fill(Color::Hex(0xFF9F0A));
+            p.Circle(Vec2(52, 86), 22, dot);
+            p.Circle(Vec2(206, 86), 22, Style(dot).MotionBlur(Vec2(16, 16)));
+            const Style card = Style().Radius(10).Fill(Color::Hex(0x30D158)).Stroke(3, Color::White(), 1.0f);
+            p.Rect(Rect(110, 64, 150, 120), card);
+            p.Rect(Rect(264, 64, 304, 120), Style(card).MotionBlur(Vec2(0, 20)));
+            const FieldPage page = MakeFieldPage(f.textures);
+            fx::Instance m = FieldMaterial(Color::White());
+            m.flags[0] |= fx::kStroke;
+            m.stroke[0] = 0.04f, m.stroke[1] = 0.52f, m.stroke[2] = 1.0f, m.stroke[3] = 1.0f;   // a blue outline outside
+            m.strokeParams[0] = 2.0f, m.strokeParams[1] = 1.0f, m.strokeParams[2] = 1.0f, m.strokeParams[3] = 0.0f;
+            FieldText(p, page, {0, 1, 2}, Vec2(16, 200), 44, m);
+            m.flags[0] |= fx::kMotion;
+            m.custom[0] = -28.0f;
+            FieldText(p, page, {0, 1, 2}, Vec2(170, 200), 44, m);
+        }
+
+        // One UI light (RenderParams::light, a point above the middle): the glass rims facing it catch it, and the
+        // cards' drop shadows fall away from it on every side.
+        void UiLightScene(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl);
+            p.Rect(Rect(0, 0, 320, 240), Style().Fill(Paint::Linear(Color::Hex(0x203050), Color::Hex(0x805030))));
+            const Style card = Style().Radius(12).Fill(Color::Hex(0xF2F2F7)).Shadow(Color::Black(0.45f), 8, Vec2(0, 10));
+            p.Rect(Rect(20, 20, 90, 80), card);
+            p.Rect(Rect(230, 20, 300, 80), card);
+            p.Rect(Rect(20, 160, 90, 220), card);
+            p.Rect(Rect(230, 160, 300, 220), card);
+            GlassMaterial g;
+            g.blur = 6.0f;
+            g.specular = 1.0f;
+            p.Rect(Rect(110, 30, 210, 90), Style().Radius(24).Glass(g));
+            p.Rect(Rect(110, 150, 210, 210), Style().Radius(24).Glass(g));
+            p.Circle(Vec2(160, 120), 6, Style().Fill(Color::White()));   // where the light is
         }
 
         // Legible text: white and black runs across a backdrop from black to white - each gets its halo where the
@@ -738,6 +788,13 @@ namespace esia::conformance
             lcd.needsDualSource = true;
             add("text_fields", "distance-field glyph shapes (FX): plain at three sizes, magnified, an outline and a glow under the faces, a gradient across a run, a drop shadow, weight",
                 &TextFields);
+            Scene& motion = add("motion_blur", "motion blur (fx::kMotion): a capsule, a circle, a stroked card and outlined glyph shapes moving while the "
+                                               "frame is shown, beside the same at rest",
+                                &MotionBlurScene);
+            motion.tolerance.channel = 10;
+            Scene& lit = add("ui_light", "one UI light (RenderParams::light): glass rims facing a point light, drop shadows falling away from it", &UiLightScene);
+            lit.tolerance = glassTolerance;
+            lit.light = render::UiLight::Point(Vec2(160, 120), 60.0f);
             Scene& legible = add("text_legible", "legible glyph shapes: a halo of the other tone where the captured backdrop comes close to the text's lightness", &TextLegible);
             legible.tolerance.channel = 10;   // the backdrop through its pyramid (as glass)
             legible.tolerance.fraction = 0.01;
@@ -856,6 +913,7 @@ namespace esia::conformance
         render::RenderParams params;
         params.maxFxInstancesPerRow = scene.fxInstancesPerRow;
         params.targetStatic = scene.repeat > 1;
+        params.light = scene.light;
         return params;
     }
 }

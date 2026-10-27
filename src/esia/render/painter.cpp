@@ -21,6 +21,11 @@ namespace esia
         // refraction.
         void ScaleLengths(fx::Instance& inst, float k)
         {
+            if (inst.flags[0] & fx::kMotion)
+            {
+                inst.custom[0] *= k;
+                inst.custom[1] *= k;
+            }
             inst.strokeParams[0] *= k;
             for (float& v : inst.shadowParams)
                 v *= k;
@@ -485,6 +490,11 @@ namespace esia
         {
             feat |= fx::kCustom;
             Set4(inst.custom, s.custom[0], s.custom[1], s.custom[2], s.custom[3]);
+        }
+        else if ((s.motion.x != 0.0f || s.motion.y != 0.0f) && !flat)   // the custom row holds the motion (not with an effect)
+        {
+            feat |= fx::kMotion;
+            Set4(inst.custom, s.motion.x, s.motion.y, 0, 0);
         }
 
         if (maskDepth_ > 0)

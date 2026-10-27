@@ -381,6 +381,20 @@ ESIA_TEST(FramePlan, LegibleTextReadsTheBlurredBackdrop)
     }
 }
 
+// A moving shape's batch covers the area it sweeps (half its displacement each way), as FxVS draws it.
+ESIA_TEST(FramePlan, MovingShapesCoverWhatTheySweep)
+{
+    DrawList dl;
+    dl.Reset(Rect(0, 0, 400, 300));
+    Painter p(dl);
+    p.Rect(Rect(100, 100, 140, 120), Style().Fill(Color::White()).MotionBlur(Vec2(40, -10)));
+    FramePlan plan;
+    plan.Build(Data({&dl}), {});
+    const PxRect b = plan.ops[0].bounds;
+    ESIA_CHECK(b.x0 <= 80.0f - 2.0f && b.x1 >= 160.0f + 2.0f && b.y0 <= 95.0f - 2.0f && b.y1 >= 125.0f + 2.0f);
+    ESIA_CHECK(b.x0 >= 75.0f && b.x1 <= 165.0f);
+}
+
 ESIA_TEST(FramePlan, UserEffectsBuildTheWholePyramid)
 {
     DrawList dl;

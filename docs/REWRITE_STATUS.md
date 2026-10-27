@@ -42,6 +42,10 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**One UI light, motion blur** (2026-10-28, in Esia): `RenderParams::light` lights every glass rim and turns every drop
+shadow away from one point (the cursor) or direction (a device's tilt); `Style::MotionBlur` blurs a shape, its stroke
+or text along the path it moves while the frame is shown.
+
 **Temporal reuse of the backdrop** (2026-10-28, in Esia): glass captures reused from frame to frame when what lies
 under them did not change (`RenderParams::targetStatic`), or for a few frames over a live background
 (`backdropReuseFrames`); both opt-in.
@@ -116,6 +120,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [One UI light, motion blur](#one-ui-light-motion-blur)
 * [Temporal reuse of the backdrop](#temporal-reuse-of-the-backdrop)
 * [Instanced glyphs and tiles](#instanced-glyphs-and-tiles)
 * [Smooth motion and legible text](#smooth-motion-and-legible-text)
@@ -150,6 +155,47 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## One UI light, motion blur
+
+The last two of the owner's picks: one light for the whole UI, which a cursor or a device's tilt can move, and motion
+blur computed from the shapes themselves.
+
+### What changed
+
+* `RenderParams::light` (`UiLight`: `Point(at, height)`, `Direction(towards)`, `FromTilt(pitch, roll)`), in the Draw
+  constants (`gDrawInfo.yzw`: the point or direction, and 0 none / 1 a direction / 1 + the height of a point; the
+  frame constants keep their layout). With it, glass rims and the side of a slab facing it catch the light from it
+  (per pixel: a point light near a panel lights the part of the rim nearest to it), and drop and inner shadows fall
+  away from it - their offsets turned, their lengths kept; the planner then counts a shadow's offset as its length
+  every way (`FramePlan::lightShadows`). Without it each glass keeps its light angle, each shadow its offset.
+  glass_window: `--light` puts it at the cursor.
+* `Style::MotionBlur(displacement)`, feature `fx::kMotion` (the displacement in the custom row; not with a user effect,
+  not when drawing flat; scaled under `PushScale`): FxPS averages the pixel's coverage along the path - the distance
+  taken at the ends of up to 8 segments at most 4 pixels long, the coverage ramp integrated exactly over each for a
+  distance that changes linearly along it (`SegmentCoverage`) - for the fill and the stroke; FxVS and the planner
+  cover the area swept. Text with a style moves the same way (every glyph shape, its outline pass too). A first
+  attempt that blurred each edge along its own normal (one closed form per pixel) pinched curved ends and broke thin
+  strokes at motions of tens of pixels; the path integral does not.
+* `fx::kVariantOnlyFeatures` (`kGlyph | kLegible | kMotion`): the features SM3's full shader leaves out; the renderer
+  and the null device decide glyph and motion variants from it.
+
+### Verified
+
+* Conformance scenes `motion_blur` (a capsule, a circle, a stroked card and outlined glyph shapes moving, beside the
+  same at rest) and `ui_light` (glass and shadowed cards around a point light): D3D9, D3D10, D3D11, D3D12, OpenGL,
+  GLES and Vulkan against the D3D11 goldens (OpenGL / GLES within 29 levels on 0.03 % of the motion pixels); every
+  other scene unchanged; ctest 37 / 37.
+* Unit tests: the displacement with its feature, scaled, left out with an effect or flat, on text; the swept area in
+  the planner's bounds; the light in the Draw constants and the shadows' symmetric reach; moving shapes taking their
+  variant where the full shader lacks motion blur.
+
+### Not done
+
+* No platform layer feeds a device's motion yet (`UiLight::FromTilt` takes the angles); EsiaGUI's springs could pass
+  their velocity to `MotionBlur`.
+* Shadows and glows are not blurred along the motion (they are soft already); images and coverage text (quads) are not
+  motion-blurred - text with a style is.
 
 ## Temporal reuse of the backdrop
 

@@ -37,6 +37,7 @@ namespace glass
             std::string screenshot;
             std::vector<std::string> fonts;
             std::string textRendering;   // --text-rendering
+            bool light = false;          // --light: one UI light at the cursor (RenderParams::light)
         };
 
         int Usage(const App& app, const char* problem)
@@ -44,7 +45,7 @@ namespace glass
             std::fprintf(stderr,
                          "%s: %s\n"
                          "usage: %s [--api %s] [--size WxH] [--scale s] [--vsync on|off] [--debug] [--no-shader-cache] [--fixed-dt seconds]\n"
-                         "       [--frames N] [--screenshot out.png] [--font file]... [--text-rendering spec]\n",
+                         "       [--frames N] [--screenshot out.png] [--font file]... [--text-rendering spec] [--light]\n",
                          app.name, problem, app.name, BuiltApis().c_str());
             return 2;
         }
@@ -177,6 +178,8 @@ namespace glass
                 cpuMs = std::chrono::duration<float, std::milli>(Clock::now() - uiStart).count();
                 esia::render::RenderParams rp;
                 rp.frame = host->Frame();
+                if (opt.light && ctx.Input().MouseValid())   // the glass rims and the shadows lit from the cursor
+                    rp.light = esia::render::UiLight::Point(ctx.Input().MousePos(), 240.0f);
                 if (monitorText)
                 {
                     rp.text.gamma = monitorText->gamma;
@@ -246,6 +249,8 @@ namespace glass
                 bool usedValue = false;
                 if (a == "--debug")
                     o.debug = true;
+                else if (a == "--light")
+                    o.light = true;
                 else if (a == "--no-shader-cache")
                     o.shaderCache = false;
                 else if (a == "--api" && needs())

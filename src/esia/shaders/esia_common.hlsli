@@ -97,7 +97,8 @@ ESIA_CBUFFER(WgtPass, b1, 1)
 ESIA_CBUFFER(WgtDraw, b2, 2)
 {
     float4 gFade;       // edge fade: x top edge, y bottom edge (render-target px), z / w fade widths (0 = none)
-    float4 gDrawInfo;   // x: first FX instance of the draw
+    float4 gDrawInfo;   // x: first FX instance of the draw  yz: the UI light's point or direction (RenderParams::light)
+                        // w: 0 no UI light, 1 a direction, 1 + its height a point (esia_fx.hlsl, UiLightDir)
 };
 
 ESIA_TEXTURE(gTex, t0, 3);

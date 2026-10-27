@@ -22,6 +22,7 @@
 #pragma once
 #include "esia/render/frame_plan.hpp"
 #include "esia/rhi/rhi.hpp"
+#include <cmath>
 #include <memory>
 #include <string>
 
@@ -34,6 +35,39 @@ namespace esia::render
         float grayscaleContrast = 0.5f;   // enhanced contrast (stem weight) of grayscale text, shapes and outlines
         float clearTypeContrast = 0.5f;   // ... of sub-pixel (LCD) text
         float clearTypeLevel = 1.0f;      // 0 = sub-pixel pages drawn with their grayscale coverage, 1 = full sub-pixel
+    };
+
+    // One light for the whole UI (RenderParams::light): glass rims catch it, the side of a slab facing it brightens,
+    // drop shadows fall away from it (their offsets turned, their lengths kept) - a point above the screen, such as the
+    // cursor, or a direction, such as a device's tilt. Off: each glass keeps its own light angle, each shadow its
+    // offset.
+    struct UiLight
+    {
+        bool enabled = false;
+        Vec2 position;          // UI units: where the point light is - or, with height 0, the direction towards it
+        float height = 0.0f;    // UI units above the screen; 0: a directional light
+        static UiLight Point(Vec2 at, float height = 240.0f)
+        {
+            UiLight l;
+            l.enabled = true;
+            l.position = at;
+            l.height = height;
+            return l;
+        }
+        static UiLight Direction(Vec2 towards)
+        {
+            UiLight l;
+            l.enabled = true;
+            l.position = towards;
+            return l;
+        }
+        // A light overhead seen on a screen held at this tilt (radians: pitch, the top edge away from the viewer; roll,
+        // the right edge down): from the top left when held level, moving across the screen against the tilt, as the
+        // glints of iOS's glass do (feed it the device's motion, e.g. CoreMotion's attitude).
+        static UiLight FromTilt(float pitch, float roll)
+        {
+            return Direction(Vec2(-0.6f - 2.0f * std::sin(roll), -0.8f + 2.0f * std::sin(pitch)));
+        }
     };
 
     struct RenderParams
@@ -56,6 +90,8 @@ namespace esia::render
         // up to this many frames after it was taken, whatever changed under it - the frost shows a backdrop that many
         // frames old, for a part of the capture cost (0 = never).
         int backdropReuseFrames = 0;
+        // One light for every glass rim and drop shadow (UiLight); off by default.
+        UiLight light;
         // GPU time per category (Caps::timestampQueries). Every switch between categories costs two timestamps, so
         // after maxProfileScopes of them the rest of the frame counts in totalMs only. Off: the frame total only.
         bool profile = true;

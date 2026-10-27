@@ -737,7 +737,7 @@ namespace esia::text
                     under |= fx::kLegible;   // its halo, under every face (in the tone the fill's color decides)
                 const std::uint32_t faces = feat & ~under;
                 if (under != 0)
-                    under |= feat & fx::kMask;
+                    under |= feat & (fx::kMask | fx::kMotion);   // masked and blurred as the faces are
                 const float k = font.size * scale / kFieldEm;   // UI units per field pixel
                 // the text's box: what paints, glass and shimmer span (a gradient across the text, not each glyph)
                 const Vec2 box = layout->metrics.size * scale;

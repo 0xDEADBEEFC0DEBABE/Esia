@@ -270,7 +270,7 @@ namespace esia::rhi
             Error("CreatePipeline: TextLcd and QuadLcd need (and only they may use) dual-source blending");
         const Pipeline p{next_++};
         pipelines_[p.id] = d;
-        const bool glyphVariant = !caps_.fullFxGlyphs && (d.fxFeatures & fx::kGlyph);
+        const bool glyphVariant = !caps_.fullFxGlyphs && (d.fxFeatures & fx::kVariantOnlyFeatures);
         if (d.fxFeatures != 0 && ((!caps_.fxFeatureVariants && !glyphVariant) || d.program != ShaderProgram::Fx))
             Error("CreatePipeline: fxFeatures without Caps::fxFeatureVariants (or glyph shapes without Caps::fullFxGlyphs) or on a non-Fx program");
         const bool background = d.background && caps_.asyncPipelines;

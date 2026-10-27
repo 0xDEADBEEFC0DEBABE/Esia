@@ -564,6 +564,34 @@ ESIA_TEST(Painter, LegibleTextAsksForItsHalo)
     ESIA_CHECK(m.flags[0] == fx::kFill);
 }
 
+// Motion blur: the displacement in the custom row with kMotion, scaled under PushScale; not with a user effect (its
+// row) nor when drawing flat.
+ESIA_TEST(Painter, MotionBlurIsTheShapesDisplacement)
+{
+    DrawList dl = MakeList();
+    Painter p(dl);
+    p.Rect(Rect(10, 10, 50, 30), Style().Fill(Color::White()).MotionBlur(Vec2(12, -4)));
+    const fx::Instance& a = dl.FxInstances()[0];
+    ESIA_CHECK((a.flags[0] & fx::kMotion) && a.custom[0] == 12.0f && a.custom[1] == -4.0f);
+    p.PushScale(Vec2(0, 0), 2.0f);
+    p.Rect(Rect(10, 10, 50, 30), Style().Fill(Color::White()).MotionBlur(Vec2(12, -4)));
+    p.PopScale();
+    ESIA_CHECK(dl.FxInstances()[1].custom[0] == 24.0f && dl.FxInstances()[1].custom[1] == -8.0f);
+    p.Rect(Rect(10, 10, 50, 30), Style().Fill(Color::White()).Effect(3, 0.5f).MotionBlur(Vec2(12, 0)));
+    ESIA_CHECK(!(dl.FxInstances()[2].flags[0] & fx::kMotion) && dl.FxInstances()[2].custom[0] == 0.5f);
+    // text with a style: every glyph shape moves
+    FakeText text;
+    PainterEnv env;
+    env.text = &text;
+    Painter t(dl, env);
+    t.Text(Vec2(0, 0), text::FontRef{1, 10}, Style().Fill(Color::White()).MotionBlur(Vec2(0, 6)), "ab");
+    ESIA_CHECK((text.lastMaterial.flags[0] & fx::kMotion) && text.lastMaterial.custom[1] == 6.0f);
+    env.flat = true;
+    Painter flat(dl, env);
+    flat.Rect(Rect(10, 10, 50, 30), Style().Radius(4).Fill(Paint::Linear(Color::White(), Color::Black())).MotionBlur(Vec2(12, 0)));
+    ESIA_CHECK(!(dl.FxInstances().back().flags[0] & fx::kMotion));
+}
+
 // A text system without distance fields draws the fill's first color, its opacity applied.
 ESIA_TEST(Painter, TextWithAStyleWithoutFieldsDrawsTheFillColor)
 {
