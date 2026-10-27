@@ -41,6 +41,8 @@ namespace esia::text
 
         // Once per frame, before drawing: starts over if the last frame needed overflow pages.
         void BeginFrame();
+        // Every glyph goes at the next BeginFrame (what is cached was rasterized another way): the pages are refilled.
+        void StartOver() { overflow_ = true; }
 
         const GlyphSlot* Find(std::uint64_t key) const;
         // Packs `bitmap` into a page and caches it under `key`. Null when it cannot fit into an empty page (a glyph

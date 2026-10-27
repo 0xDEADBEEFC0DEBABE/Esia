@@ -42,6 +42,10 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**FreeType's rendering** (2026-10-28, in Esia): `TextRendering` chooses how the FreeType text system turns outlines
+into pixels - FreeType's hinting (light, the fonts' own with the v35 or v40 interpreter, the autohinter), its
+rasterizer, stem darkening, hinted advances; the design's outlines stay the default.
+
 **Bitmap fonts** (2026-10-07): BDF, PCF and Windows FNT / FON draw pixel for pixel, sizes snapped to a strike's whole
 multiples; a .fon's sizes are one font.
 
@@ -93,6 +97,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [FreeType's rendering](#freetypes-rendering)
 * [Bitmap fonts](#bitmap-fonts)
 * [Text outlines](#text-outlines)
 * [CPU of plain widgets](#cpu-of-plain-widgets)
@@ -121,6 +126,45 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## FreeType's rendering
+
+`TextRendering` (`include/esia/text/text.hpp`) chooses how the FreeType text system turns outlines into pixels. The
+default is unchanged - the design's outlines through the analytic rasterizer - and so is every golden image.
+
+### What changed
+
+* `Hinting` (None, Light, Full, Auto), `TrueTypeInterpreter` (V40, V35), `GlyphRasterizer` (Analytic, FreeType), stem
+  darkening and hinted advances; the presets `Design`, `Light`, `Crisp` and `NativeTextRendering()`;
+  `ParseTextRendering` for `--text-rendering` (glass_window, every platform) and `ESIA_TEXT_RENDERING` (any program).
+  `FreeTypeDesc::rendering` sets it at creation, `TextSystem::SetRendering` from the next `NewFrame` on: the atlas
+  starts over (`GlyphAtlas::StartOver`), and the layouts too when the advances change.
+* Hinted or FreeType-rasterized glyphs load at their size; `FT_Set_Char_Size` runs (with a TrueType font's preparation
+  program) only when the size changes. The interpreter and stem darkening are FreeType properties set when the
+  rendering changes; the faces then request their sizes again.
+* Hinted advances (`Full` / `Auto`): `FT_Get_Advance` at the frame's density, plus what HarfBuzz added (kerning,
+  marks) rounded; the layout cache's key gains the density. Hinting across (v35, the autohinter) or hinted advances
+  put the pens on whole pixels; otherwise hinted glyphs keep the quarter-pixel phases.
+* The bundled FreeType turns on `FT_CONFIG_OPTION_SUBPIXEL_RENDERING` and adds the `autofit` and `smooth` modules.
+
+### Verified
+
+* `tests/text/test_ft_rendering.cpp`: the parser; the stem of an "l" in one pixel column with v35 and the autohinter
+  at every phase, straddling two with v40 or unhinted; fewer partly covered pixels on horizontals (light 0.54, crisp
+  0.29 times the design's with DroidSans); whole-pixel advances at densities 1, 1.5 and 2; FreeType's rasterizer
+  within 2 % of the analytic one; v35, v40 and the autohinter differ; stem darkening thickens a CFF font; a new
+  rendering waits for the next frame; the environment variable; the golden image `ft_crisp` (compared with the bundled
+  FreeType only, `ESIA_TEST_BUNDLED_FREETYPE`).
+* Windows, clang-cl with `-Werror`: 33 / 33 tests; the changed sources under the Linux CI's warnings.
+* glass_window on Direct3D 11 at scale 1 with `design`, `light`, `crisp` and `native`.
+
+### Notes
+
+* Segoe UI's instructions were written for ClearType. Under v35 (`crisp`) they fit its stems for black-and-white
+  pixels: an "m" gets narrower inside its advance and the spacing looks uneven, as GDI text without ClearType did.
+  Fonts with classic hints (Tahoma, Verdana, DejaVu, Droid) suit `crisp`; Segoe UI suits `native` (v40).
+* The autohinter's smooth mode gives stems the font's standard width and leans them into one pixel with a sliver
+  beside it, where v35 makes them whole pixels.
 
 ## Bitmap fonts
 

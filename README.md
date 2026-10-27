@@ -43,7 +43,7 @@ EsiaGUI is this repository with the widget layer added: it shares Esia's history
 | --- | --- |
 | UI core (`src/esia/core`) | ([UI_CORE.md](docs/UI_CORE.md)) ids, input (touch included), windows with per-window DPI, front-to-back hit testing, press and key ownership, containers and layout providers, child scroll regions, popups and tooltips, per-id state, draw lists, texture registry, debug checks for mistakes in UI code |
 | Renderer (`src/esia/render`) | the Painter (rectangles, capsules, circles, lines, polylines, arcs, rings, sectors and areas as signed-distance shapes, shadows, inner and outer glow, images, icons, text, masks, scales, glow layers, edge fades), the frame planner, liquid glass (backdrop captures, blur pyramid, refraction, dispersion), glow layers, edge fades, custom HLSL effects on Direct3D, GPU profiling |
-| Text (`src/esia/text`) | analytic glyph rasterizer, glyph atlas, FreeType + HarfBuzz text system (bundled or the system's), system font lookup with fallback chains for every major script, color emoji from bitmap strikes (sbix, CBDT) and COLR fonts (gradients, transforms, composite modes), grayscale antialiasing, text outlines (glyphs grown by exact distance), bitmap fonts (BDF, PCF, Windows FNT / FON, pixel for pixel) |
+| Text (`src/esia/text`) | analytic glyph rasterizer, glyph atlas, FreeType + HarfBuzz text system (bundled or the system's) with FreeType's rendering to choose from (hinting: light, the fonts' own with the v35 or v40 interpreter, the autohinter; its rasterizer, stem darkening, whole-pixel advances), system font lookup with fallback chains for every major script, color emoji from bitmap strikes (sbix, CBDT) and COLR fonts (gradients, transforms, composite modes), grayscale antialiasing, text outlines (glyphs grown by exact distance), bitmap fonts (BDF, PCF, Windows FNT / FON, pixel for pixel) |
 | Backends (`src/esia/rhi/<name>`) | DirectX (Direct3D 9 / 10 / 11 / 12, in `rhi/directx`), OpenGL 3.3 / OpenGL ES 3.0, Vulkan 1.1+, Metal; and `rhi/null`, a device without a GPU that records the command stream and checks the call rules |
 | Platform | layers as libraries for Win32 (`src/esia/platform/win32`, [PLATFORM_WIN32.md](docs/PLATFORM_WIN32.md)), X11 (`src/esia/platform/x11`) and Android (`src/esia/platform/android`); the example's own frames on AppKit (macOS) and UIKit (iOS) |
 | Example | `glass_window`: the whole path (platform input, core, renderer, RHI, swap chain) in a window, on every system |
@@ -90,7 +90,10 @@ The commands and what to install are in each system's section: [Windows](#window
   `windows-clang-cl`, `linux-clang`, `linux-clang-release`, `windows-mingw-cross`, `macos-clang` and `ios`.
 * Text: with `ESIA_TEXT_FREETYPE` on (the default), FreeType and HarfBuzz come from the system, or are downloaded at
   configure time and built with the project (`ESIA_TEXT_DEPS=auto|bundled|system`). Offline, point
-  `FETCHCONTENT_SOURCE_DIR_ESIA_FREETYPE` / `..._HARFBUZZ` at extracted sources.
+  `FETCHCONTENT_SOURCE_DIR_ESIA_FREETYPE` / `..._HARFBUZZ` at extracted sources. How glyphs become pixels is the text
+  system's `TextRendering` (`include/esia/text/text.hpp`): the design's outlines by default; the environment variable
+  `ESIA_TEXT_RENDERING` sets it for any program (`crisp`, `light`, `native`, or settings such as
+  `hinting=full,interpreter=35,rasterizer=freetype`, see `ParseTextRendering`).
 * Every preset puts the example in `build/<preset>/bin` (Visual Studio's generator in `bin\Release` or `bin\Debug`;
   Android: an APK in `build/android/apk`). `ESIA_BUILD_EXAMPLES` builds it when Esia is the top-level project.
 * Tests: `ctest --preset <preset>` runs them, the conformance suite on the machine's GPU included, for the presets
@@ -141,6 +144,7 @@ glass_window --api vulkan --vsync off      # another backend, uncapped frame rat
 | `--frames N`, `--screenshot out.png`, `--fixed-dt s` | quit after N frames, write the last one (alone: after 60 frames), advance the UI clock by `s` per frame (deterministic captures) |
 | `--debug` | the API's validation layer; the message count is printed at exit |
 | `--font file` | font files instead of the system's (the first is the main one, the others its fallbacks) |
+| `--text-rendering spec` | how glyphs become pixels: `crisp` (the fonts' hints, the classic interpreter, whole pixels), `light`, `native` (the platform's look), `design` (the default), or settings: `hinting=none\|light\|full\|auto`, `interpreter=35\|40`, `rasterizer=analytic\|freetype`, `stem-darkening`, `hinted-advances` |
 
 ## Windows
 
@@ -347,10 +351,11 @@ the commit for `main` and delete the branch.
 
 ## Roadmap
 
-1. Text: FreeType's rendering in full beside the analytic rasterizer - its hinting (the TrueType interpreter's v35 and
-   v40, light, the autohinter), its rasterizer, LCD (sub-pixel) rendering with its filters, stem darkening - chosen per
-   text system; then the bidi algorithm, variable-font instances (SF's weights), fallback per language and fallback
-   fonts loaded when first needed.
+1. Text: LCD (sub-pixel) rendering with FreeType's filters, also on glass and in layers (resolved against the
+   captured backdrop); multi-channel distance fields (MTSDF) for large and transformed text and for text effects
+   (outline, glow, shadow, weight animation in one draw); hinted text at rest that turns unhinted while it moves;
+   then the bidi algorithm, variable-font instances (SF's weights), fallback per language and fallback fonts loaded
+   when first needed.
 2. Platform layers: Cocoa and UIKit as libraries (the example's AppKit and UIKit frames are the start), then Wayland,
    SDL, and inline IME composition on Linux and Android.
 3. Performance: fewer render-pass breaks per backdrop capture on tile-based GPUs; FX feature variants on Vulkan and

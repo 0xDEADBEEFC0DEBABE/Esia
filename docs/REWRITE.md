@@ -377,10 +377,20 @@ Implementations:
   on Linux / Android / consoles. HarfBuzz shapes in design units (kerning, ligatures, marks, complex scripts),
   scaled to the size in float - unhinted, linear layout at every pixel density; per-character fallback through
   the added fonts; greedy line breaking (spaces, hyphens, CJK with a small kinsoku set, character breaks for
-  overlong words), ellipsis trimming, alignment; WGT's uniform line box. FreeType only reads the unhinted outlines;
-  they are covered by WGT's analytic rasterizer, now platform-free in `include/esia/text/glyph_raster.hpp`
+  overlong words), ellipsis trimming, alignment; WGT's uniform line box. By default FreeType only reads the unhinted
+  outlines; they are covered by WGT's analytic rasterizer, now platform-free in `include/esia/text/glyph_raster.hpp`
   (exact area coverage, 4 horizontal sub-pixel phases) and packed by `GlyphAtlas` into the
-  `TextureRegistry`. FreeType 2.14.3 and HarfBuzz 14.5.0 are built from pinned sources where the system has
+  `TextureRegistry`. `TextRendering` (`text.hpp`; `FreeTypeDesc::rendering`, `TextSystem::SetRendering`, from the
+  next `NewFrame` on; `ESIA_TEXT_RENDERING`) chooses FreeType's rendering instead: hinting (`Light`: vertical only,
+  FreeType's light autohinter; `Full`: the fonts' own instructions with the v40 interpreter - vertical, ClearType's -
+  or the classic v35 one, which moves stems sideways too; `Auto`: the autohinter in full), FreeType's rasterizer
+  (`smooth`) for the hinted or unhinted outlines, stem darkening (CFF and the autohinter), and hinted advances (`Full`
+  / `Auto`: each glyph's hinted advance at the frame's pixel density plus HarfBuzz's kerning rounded, so every pen
+  is on a whole pixel - the layout then depends on the density). Presets: `Design` (the default), `Light`, `Crisp`
+  (v35, FreeType's rasterizer, hinted advances: the classic sharp Windows look), `NativeTextRendering()` (DirectWrite's
+  v40 look on Windows, fontconfig's hintslight with stem darkening on Linux, the design on Apple and Android). Hinted
+  glyphs keep the quarter-pixel phases unless the pens are whole pixels. The FreeType build turns on
+  `FT_CONFIG_OPTION_SUBPIXEL_RENDERING` and adds the `autofit` and `smooth` modules. FreeType 2.14.3 and HarfBuzz 14.5.0 are built from pinned sources where the system has
   neither (`ESIA_TEXT_DEPS=auto|bundled|system`, `cmake/EsiaTextDeps.cmake`), so the same text system runs on
   Windows too. Right-to-left words in left-to-right text are laid out right to left, and the white space and
   punctuation around them stay where they were typed (a small part of UAX #9: neutrals between two right-to-left

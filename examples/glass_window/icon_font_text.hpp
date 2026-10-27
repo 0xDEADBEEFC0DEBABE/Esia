@@ -40,6 +40,8 @@ namespace glass
                 inner_->AddFallback(font);
         }
         void NewFrame(const esia::text::RasterParams& params) override { inner_->NewFrame(params); }
+        void SetRendering(const esia::text::TextRendering& rendering) override { inner_->SetRendering(rendering); }
+        esia::text::TextRendering Rendering() const override { return inner_->Rendering(); }
         esia::text::TextMetrics Measure(esia::text::FontRef font, std::string_view text, float wrapWidth, std::uint32_t flags) override
         {
             return inner_->Measure(font, text, wrapWidth, flags);

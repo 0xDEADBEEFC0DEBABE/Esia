@@ -1,0 +1,336 @@
+// TextRendering in the FreeType text system: the parser and presets, hinting (light, the fonts' own with either
+// TrueType interpreter, the autohinter), FreeType's rasterizer beside the analytic one, stem darkening, hinted advances,
+// when a new rendering takes over, ESIA_TEXT_RENDERING - and a golden image of the crisp preset (FreeType's own pixels,
+// so only against the FreeType the golden was made with: the bundled one).
+#include "esia/text/freetype.hpp"
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <string>
+#include "font_test_util.hpp"
+#include "ft_test_util.hpp"
+
+using namespace esia;
+using namespace esia::texttest;
+
+namespace
+{
+    struct Fixture
+    {
+        TextureRegistry textures;
+        PageStore pages;   // what the registry received, over all draws (TakeChanges hands each change out once)
+        std::unique_ptr<text::TextSystem> ts;
+        text::FontId droid = 0;
+
+        explicit Fixture(const text::TextRendering& rendering = {}, float pixelsPerUnit = 1.0f)
+        {
+            text::FreeTypeDesc desc;
+            desc.rendering = rendering;
+            ts = text::CreateFreeTypeTextSystem(textures, desc);
+            ESIA_CHECK(ts != nullptr);
+            if (!ts)
+                return;
+            ts->SetRendering(rendering);   // over ESIA_TEXT_RENDERING, should the environment have it
+            droid = ts->AddFontFile((kFonts + "/DroidSans.ttf").c_str());
+            ESIA_CHECK(droid != 0);
+            ts->NewFrame({pixelsPerUnit});
+        }
+    };
+
+    // A text drawn in black at `pos` as 8-bit coverage, `w` x `h` pixels (Composite over white, inverted).
+    struct Coverage
+    {
+        int w = 0, h = 0;
+        std::vector<std::uint8_t> v;
+        std::uint8_t At(int x, int y) const { return v[(std::size_t)y * (std::size_t)w + (std::size_t)x]; }
+        long Sum() const
+        {
+            long s = 0;
+            for (std::uint8_t c : v)
+                s += c;
+            return s;
+        }
+        // pixels neither empty nor full: the blur of edges between pixels
+        int Partial(int lo = 16, int hi = 239) const
+        {
+            int n = 0;
+            for (std::uint8_t c : v)
+                n += c > lo && c < hi;
+            return n;
+        }
+    };
+
+    Coverage Draw(Fixture& f, text::FontId font, float size, Vec2 pos, std::string_view s, int w = 160, int h = 48)
+    {
+        DrawList dl = NewList();
+        f.ts->Draw(dl, {font, size}, pos, Color::Black(), s);
+        f.pages.Collect(f.textures);
+        const testkit::Image img = Composite(dl, f.pages, w, h);
+        Coverage c;
+        c.w = w;
+        c.h = h;
+        c.v.resize((std::size_t)w * (std::size_t)h);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                c.v[(std::size_t)y * (std::size_t)w + (std::size_t)x] = (std::uint8_t)(255 - img.At(x, y)[0]);
+        return c;
+    }
+
+    // Of a glyph drawn alone, the share of its fullest row's ink in that row's strongest pixel: 1 for a vertical stem
+    // between two pixel edges, about a half for one straddling two pixels.
+    float StemSharpness(const Coverage& c)
+    {
+        int row = 0, rowInk = -1;
+        for (int y = 0; y < c.h; ++y)
+        {
+            int ink = 0;
+            for (int x = 0; x < c.w; ++x)
+                ink += c.At(x, y);
+            if (ink > rowInk)
+            {
+                row = y;
+                rowInk = ink;
+            }
+        }
+        int strongest = 0;
+        for (int x = 0; x < c.w; ++x)
+            strongest = std::max(strongest, (int)c.At(x, row));
+        return rowInk > 0 ? (float)strongest / (float)rowInk : 0.0f;
+    }
+
+    void SetEnv(const char* name, const char* value)
+    {
+#if defined(_WIN32)
+        _putenv_s(name, value ? value : "");
+#else
+        if (value)
+            setenv(name, value, 1);
+        else
+            unsetenv(name);
+#endif
+    }
+
+    text::TextRendering With(text::Hinting hinting, text::GlyphRasterizer rasterizer = text::GlyphRasterizer::Analytic)
+    {
+        text::TextRendering r;
+        r.hinting = hinting;
+        r.rasterizer = rasterizer;
+        return r;
+    }
+}
+
+ESIA_TEST(TextRendering, ParsesPresetsAndSettings)
+{
+    text::TextRendering r;
+    ESIA_CHECK(text::ParseTextRendering("crisp", r) && r == text::TextRendering::Crisp());
+    ESIA_CHECK(text::ParseTextRendering("design", r) && r == text::TextRendering::Design());
+    ESIA_CHECK(text::ParseTextRendering("native", r) && r == text::NativeTextRendering());
+    ESIA_CHECK(text::ParseTextRendering(" light , stem-darkening ", r) && r.hinting == text::Hinting::Light && r.stemDarkening);
+    // later words override earlier ones
+    ESIA_CHECK(text::ParseTextRendering("crisp,interpreter=40,hinted-advances=0", r));
+    ESIA_CHECK(r.hinting == text::Hinting::Full && r.interpreter == text::TrueTypeInterpreter::V40 && !r.hintedAdvances &&
+               r.rasterizer == text::GlyphRasterizer::FreeType);
+    ESIA_CHECK(text::ParseTextRendering("hinting=auto,rasterizer=analytic", r) && r.hinting == text::Hinting::Auto &&
+               r.rasterizer == text::GlyphRasterizer::Analytic);
+    // a word it does not know: false, `out` unchanged, the word named
+    const text::TextRendering before = r;
+    std::string error;
+    ESIA_CHECK(!text::ParseTextRendering("light,hinting=sharp", r, &error) && r == before);
+    ESIA_CHECK(error.find("hinting=sharp") != std::string::npos);
+    ESIA_CHECK(!text::ParseTextRendering("bold", r) && !text::ParseTextRendering("stem-darkening=maybe", r));
+    ESIA_CHECK(text::ParseTextRendering("", r) && r == before);
+}
+
+// Hinting that fits vertical stems puts the stem of an "l" into one pixel column wherever the text starts: the classic
+// interpreter between two pixel edges, the autohinter (smooth: its standard width, 1.02 px here) leaning into one
+// pixel with a sliver beside it. Unhinted, or with v40 (vertical only), it straddles two pixels at some of the
+// quarter-pixel phases.
+ESIA_TEST(FreeTypeRendering, FullHintingPutsStemsBetweenPixelEdges)
+{
+    const auto sharpness = [](const text::TextRendering& r, float& weakest, int& strongest) {
+        Fixture f(r);
+        weakest = 1.0f;
+        strongest = 0;
+        for (int i = 0; i < 4; ++i)
+        {
+            const Coverage c = Draw(f, f.droid, 11.0f, Vec2(10.0f + 0.25f * (float)i, 10.0f), "l");
+            weakest = std::min(weakest, StemSharpness(c));
+            for (std::uint8_t v : c.v)
+                strongest = std::max(strongest, (int)v);
+        }
+    };
+    float weakest = 0.0f;
+    int strongest = 0;
+    sharpness(text::TextRendering::Crisp(), weakest, strongest);
+    ESIA_CHECK(weakest > 0.95f && strongest >= 248);
+    sharpness(With(text::Hinting::Auto), weakest, strongest);
+    ESIA_CHECK(weakest > 0.85f);
+    sharpness(With(text::Hinting::Auto, text::GlyphRasterizer::FreeType), weakest, strongest);
+    ESIA_CHECK(weakest > 0.85f);
+    sharpness({}, weakest, strongest);
+    ESIA_CHECK(weakest < 0.75f);
+    sharpness(With(text::Hinting::Full, text::GlyphRasterizer::FreeType), weakest, strongest);   // v40
+    ESIA_CHECK(weakest < 0.75f);
+}
+
+// Hinting fits horizontals too: the bars of "=" and "-" land on rows, so far fewer pixels are partly covered (light:
+// about half as many with DroidSans' own hints at v40, which place the bars but keep their thickness; crisp: a third).
+ESIA_TEST(FreeTypeRendering, HintingSharpensHorizontals)
+{
+    const auto partial = [](const text::TextRendering& r) {
+        Fixture f(r);
+        int n = 0;
+        for (float size : {11.0f, 12.0f, 13.0f, 14.0f, 15.0f})
+            n += Draw(f, f.droid, size, Vec2(10, 10), "= - =").Partial();
+        return n;
+    };
+    const int design = partial({});
+    ESIA_CHECK(partial(text::TextRendering::Light()) * 3 < design * 2);
+    ESIA_CHECK(partial(text::TextRendering::Crisp()) * 2 < design);
+    ESIA_CHECK(partial(With(text::Hinting::Auto)) * 3 < design * 2);
+}
+
+// Light hinting keeps the design's widths; hinted advances (full hinting) put every pen on a whole pixel, at the
+// density of the frame: the layout then follows the density.
+ESIA_TEST(FreeTypeRendering, HintedAdvancesAreWholePixels)
+{
+    const std::string_view s = "Waffle Toolkit";
+    Fixture design;
+    const float width = design.ts->Measure({design.droid, 13.0f}, s).size.x;
+    Fixture light(text::TextRendering::Light());
+    ESIA_CHECK_NEAR(light.ts->Measure({light.droid, 13.0f}, s).size.x, width, 1e-3f);
+    text::TextRendering lightAdvances = text::TextRendering::Light();
+    lightAdvances.hintedAdvances = true;   // light hinting does not change advances: still the design's
+    Fixture la(lightAdvances);
+    ESIA_CHECK_NEAR(la.ts->Measure({la.droid, 13.0f}, s).size.x, width, 1e-3f);
+
+    for (float ppu : {1.0f, 1.5f, 2.0f})
+    {
+        Fixture crisp(text::TextRendering::Crisp(), ppu);
+        const float w = crisp.ts->Measure({crisp.droid, 13.0f}, s).size.x;
+        ESIA_CHECK(IsWhole(w * ppu));
+        ESIA_CHECK(std::fabs(w - width) < 0.15f * width);   // the same text, a little wider or narrower
+        // every glyph on a whole pixel, whatever the origin's fraction
+        DrawList dl = NewList();
+        crisp.ts->Draw(dl, {crisp.droid, 13.0f}, Vec2(10.3f, 5.6f), Color::Black(), s);
+        for (const Quad& q : Quads(dl))
+            ESIA_CHECK(IsWhole(q.r.min.x * ppu));
+    }
+    // one text system, another density: another layout
+    Fixture crisp(text::TextRendering::Crisp());
+    const float at1 = crisp.ts->Measure({crisp.droid, 13.0f}, s).size.x;
+    crisp.ts->NewFrame({1.25f});
+    const float at125 = crisp.ts->Measure({crisp.droid, 13.0f}, s).size.x;
+    ESIA_CHECK(IsWhole(at125 * 1.25f) && at1 != at125);
+}
+
+// FreeType's rasterizer on the design's outline paints what the analytic one does: the same boxes, the same ink.
+ESIA_TEST(FreeTypeRendering, FreeTypesRasterizerMatchesTheAnalyticOne)
+{
+    Fixture analytic;
+    Fixture freetype(With(text::Hinting::None, text::GlyphRasterizer::FreeType));
+    for (float x : {10.0f, 10.25f, 10.5f, 10.75f})
+    {
+        const Coverage a = Draw(analytic, analytic.droid, 24.0f, Vec2(x, 6), "Esia AVg");
+        const Coverage b = Draw(freetype, freetype.droid, 24.0f, Vec2(x, 6), "Esia AVg");
+        ESIA_CHECK(std::labs(a.Sum() - b.Sum()) < a.Sum() / 50);   // within 2 %
+        int apart = 0;
+        for (std::size_t i = 0; i < a.v.size(); ++i)
+            apart += std::abs((int)a.v[i] - (int)b.v[i]) > 48;
+        ESIA_CHECK(apart < 12);
+    }
+}
+
+// The two TrueType interpreters fit DroidSans differently (the classic one moves stems sideways too); the
+// autohinter differs from the font's own hints.
+ESIA_TEST(FreeTypeRendering, InterpretersAndTheAutohinterDiffer)
+{
+    const auto image = [](const text::TextRendering& r) { Fixture f(r); return Draw(f, f.droid, 11.0f, Vec2(10, 10), "Wavy lines mmm"); };
+    text::TextRendering v35 = text::TextRendering::Crisp(), v40 = v35;
+    v40.interpreter = text::TrueTypeInterpreter::V40;
+    v35.hintedAdvances = v40.hintedAdvances = false;   // the same layout: only the shapes differ
+    const Coverage a = image(v35), b = image(v40), c = image(With(text::Hinting::Auto, text::GlyphRasterizer::FreeType));
+    const auto differ = [](const Coverage& p, const Coverage& q) {
+        int n = 0;
+        for (std::size_t i = 0; i < p.v.size(); ++i)
+            n += p.v[i] != q.v[i];
+        return n;
+    };
+    ESIA_CHECK(differ(a, b) > 20);
+    ESIA_CHECK(differ(b, c) > 20);
+}
+
+// FreeType's stem darkening thickens a CFF font's thin stems at small sizes.
+ESIA_TEST(FreeTypeRendering, StemDarkeningThickensCffStems)
+{
+    const auto ink = [](bool darkening) {
+        text::TextRendering r = text::TextRendering::Light();
+        r.rasterizer = text::GlyphRasterizer::FreeType;
+        r.stemDarkening = darkening;
+        Fixture f(r);
+        const text::FontId sc = f.ts->AddFontFile((kFonts + "/NotoSansSC-Subset.otf").c_str());
+        ESIA_CHECK(sc != 0);
+        return Draw(f, sc, 12.0f, Vec2(10, 10), "\xE4\xB8\xAD\xE5\xAD\x97\xE4\xBD\x93\xE5\x9C\xA8").Sum();   // 中字体在
+    };
+    ESIA_CHECK(ink(true) > ink(false) + ink(false) / 50);
+}
+
+// A new rendering takes over at the next NewFrame: until then the glyphs and layouts are the old ones.
+ESIA_TEST(FreeTypeRendering, ANewRenderingTakesOverAtTheNextFrame)
+{
+    Fixture f;
+    const Coverage before = Draw(f, f.droid, 11.0f, Vec2(10.25f, 10), "lime");
+    const float width = f.ts->Measure({f.droid, 11.0f}, "lime").size.x;
+    f.ts->SetRendering(text::TextRendering::Crisp());
+    ESIA_CHECK(f.ts->Rendering() == text::TextRendering::Crisp());
+    ESIA_CHECK(Draw(f, f.droid, 11.0f, Vec2(10.25f, 10), "lime").v == before.v);
+    ESIA_CHECK(f.ts->Measure({f.droid, 11.0f}, "lime").size.x == width);
+    f.ts->NewFrame({1.0f});
+    ESIA_CHECK(Draw(f, f.droid, 11.0f, Vec2(10.25f, 10), "lime").v != before.v);
+    ESIA_CHECK(IsWhole(f.ts->Measure({f.droid, 11.0f}, "lime").size.x));
+    // and back
+    f.ts->SetRendering({});
+    f.ts->NewFrame({1.0f});
+    ESIA_CHECK(Draw(f, f.droid, 11.0f, Vec2(10.25f, 10), "lime").v == before.v);
+}
+
+// ESIA_TEXT_RENDERING sets a new text system's rendering; a word it does not know leaves the description's.
+ESIA_TEST(FreeTypeRendering, TheEnvironmentVariableSetsIt)
+{
+    TextureRegistry textures;
+    SetEnv("ESIA_TEXT_RENDERING", "crisp,interpreter=40");
+    std::unique_ptr<text::TextSystem> a = text::CreateFreeTypeTextSystem(textures);
+    SetEnv("ESIA_TEXT_RENDERING", "hinting=sharp");
+    text::FreeTypeDesc light;
+    light.rendering = text::TextRendering::Light();
+    std::unique_ptr<text::TextSystem> b = text::CreateFreeTypeTextSystem(textures, light);
+    SetEnv("ESIA_TEXT_RENDERING", nullptr);
+    std::unique_ptr<text::TextSystem> c = text::CreateFreeTypeTextSystem(textures, light);
+    ESIA_CHECK(a && b && c);
+    if (!a || !b || !c)
+        return;
+    text::TextRendering want = text::TextRendering::Crisp();
+    want.interpreter = text::TrueTypeInterpreter::V40;
+    ESIA_CHECK(a->Rendering() == want);
+    ESIA_CHECK(b->Rendering() == text::TextRendering::Light());
+    ESIA_CHECK(c->Rendering() == text::TextRendering::Light());
+}
+
+ESIA_TEST(FreeTypeRendering, RendersTheCrispGoldenImage)
+{
+#if !defined(ESIA_TEST_BUNDLED_FREETYPE)
+    std::printf("  skipped: FreeType's own pixels, compared only with the bundled FreeType the golden was made with\n");
+#else
+    Fixture f(text::TextRendering::Crisp());
+    const text::FontId karla = f.ts->AddFontFile((kFonts + "/Karla-Regular.ttf").c_str());
+    DrawList dl = NewList();
+    const Color ink(0.08f, 0.08f, 0.10f, 1.0f);
+    f.ts->Draw(dl, {f.droid, 11.0f}, Vec2(8, 6), ink, "Crisp: the fonts' own hints, the classic interpreter, whole pixels.");
+    f.ts->Draw(dl, {f.droid, 13.0f}, Vec2(8, 24), ink, "The quick brown fox jumps over the lazy dog 0123456789");
+    f.ts->Draw(dl, {karla, 12.0f}, Vec2(8, 44), Color(0.0f, 0.35f, 0.8f, 1.0f), "Karla 12: Waffle Toolkit, liquid glass, AV To");
+    f.ts->Draw(dl, {f.droid, 16.0f}, Vec2(8, 62), ink, "Esia \xC2\xB7 AV To Wa fi \xC3\x80\xC3\x89\xC3\x8E\xC3\xB5\xC3\xBC");
+    f.ts->Draw(dl, {f.droid, 9.0f}, Vec2(8, 86), ink, "Nine pixels per em: the smallest labels stay legible with full hinting.");
+    f.pages.Collect(f.textures);
+    CheckGolden(Composite(dl, f.pages, 480, 104), "ft_crisp");
+#endif
+}

@@ -22,7 +22,10 @@
 #include <atomic>
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_ADVANCES_H
 #include FT_BITMAP_H
+#include FT_DRIVER_H
+#include FT_MODULE_H
 #include FT_OUTLINE_H
 #include FT_TRUETYPE_TABLES_H
 #include <hb-ot.h>
@@ -31,6 +34,8 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -150,6 +155,7 @@ namespace esia::text
             hb_font_t* hb = nullptr;
             float upem = 1000.0f;
             float ascent = 0.0f, descent = 0.0f, gap = 0.0f;   // design units, descent positive
+            FT_F26Dot6 sizeSet = 0;   // the em FT_Set_Char_Size last gave `ft` (hinted loads), 26.6 pixels; 0 = none
             std::uint32_t codePages = 0;                        // OS/2 ulCodePageRange1
 
             Face() = default;
@@ -237,7 +243,8 @@ namespace esia::text
         struct Layout
         {
             std::string text;
-            std::uint32_t params[4] = {};   // font id, size, wrap width, flags (the cache key's inputs)
+            // font id, size, wrap width, flags, and the density when the advances are hinted (the cache key's inputs)
+            std::uint32_t params[5] = {};
             std::vector<PlacedGlyph> glyphs;
             TextMetrics metrics;
             std::uint64_t lastFrame = 0;
@@ -313,7 +320,8 @@ namespace esia::text
         public:
             FreeTypeTextSystem(TextureRegistry& textures, const FreeTypeDesc& desc)
                 : atlas_(textures, GlyphAtlasDesc{desc.atlasPageSize, desc.atlasMaxPages, 1}),
-                  colorAtlas_(textures, GlyphAtlasDesc{std::min(desc.atlasPageSize, 1024), 2, 1, TextureFormat::RGBA8})
+                  colorAtlas_(textures, GlyphAtlasDesc{std::min(desc.atlasPageSize, 1024), 2, 1, TextureFormat::RGBA8}),
+                  rendering_(desc.rendering), pending_(desc.rendering)
             {
             }
 
@@ -335,6 +343,7 @@ namespace esia::text
                 }
                 buffer_ = hb_buffer_create();
                 unicode_ = hb_unicode_funcs_get_default();
+                ApplyRendering();
                 return hb_buffer_allocation_successful(buffer_) != 0;
             }
 
@@ -382,11 +391,31 @@ namespace esia::text
             }
             std::uint64_t TileGeneration() override { return serial_ << 32 | ((std::uint64_t)atlas_.Resets() + 1u); }
 
+            void SetRendering(const TextRendering& rendering) override { pending_ = rendering; }
+            TextRendering Rendering() const override { return pending_; }
+
             void NewFrame(const RasterParams& params) override
             {
                 params_ = params;
                 if (!(params_.pixelsPerUnit > 0.0f))
                     params_.pixelsPerUnit = 1.0f;
+                if (!(pending_ == rendering_))
+                {
+                    // another rendering: every glyph is rasterized again, and the layouts are built again when the
+                    // advances change with it
+                    const bool advances = HintedAdvances();
+                    rendering_ = pending_;
+                    ApplyRendering();
+                    atlas_.StartOver();
+                    hintedAdvanceCache_.clear();
+                    if (advances || HintedAdvances())
+                    {
+                        layouts_.clear();
+                        spareLayouts_.clear();
+                        layoutFront_.fill(nullptr);
+                        lastLayout_ = nullptr;
+                    }
+                }
                 if (bitmapFaces_ > 0 && params_.pixelsPerUnit != layoutPixelsPerUnit_)
                 {
                     // a bitmap font's sizes snap to its strikes in pixels: its layouts change with the density
@@ -611,9 +640,11 @@ namespace esia::text
                         phase = 0;
                         xi += 1.0f;
                     }
-                    if (faces_[g.face]->bitmap)
+                    if (faces_[g.face]->bitmap || wholePixelPens_)
                     {
-                        xi = FloorPx(px + 0.5f);   // a bitmap font's pixels on the target's: whole pixels, no phases
+                        // a bitmap font's pixels on the target's, or outlines hinted in both directions for a pen on a
+                        // whole pixel: whole pixels, no phases
+                        xi = FloorPx(px + 0.5f);
                         phase = 0;
                     }
                     const float yi = FloorPx(py + 0.5f);
@@ -964,7 +995,7 @@ namespace esia::text
             }
 
             // A text's key: its parameters and its bytes, 8 at a time (FNV-1a went byte by byte)
-            static std::uint64_t LayoutKey(const std::uint32_t (&params)[4], std::string_view text)
+            static std::uint64_t LayoutKey(const std::uint32_t (&params)[5], std::string_view text)
             {
                 std::uint64_t h = 0x9E3779B97F4A7C15ull ^ text.size();
                 const auto mix = [&h](std::uint64_t v) {
@@ -973,6 +1004,7 @@ namespace esia::text
                 };
                 mix(((std::uint64_t)params[0] << 32) | params[1]);
                 mix(((std::uint64_t)params[2] << 32) | params[3]);
+                mix(params[4]);
                 const char* p = text.data();
                 std::size_t n = text.size();
                 for (; n >= 8; p += 8, n -= 8)
@@ -994,7 +1026,8 @@ namespace esia::text
             {
                 if (font.id == 0 || font.id > faces_.size() || !(font.size > 0.0f))
                     return nullptr;
-                const std::uint32_t params[4] = {font.id, std::bit_cast<std::uint32_t>(font.size), std::bit_cast<std::uint32_t>(wrapWidth), flags};
+                const std::uint32_t params[5] = {font.id, std::bit_cast<std::uint32_t>(font.size), std::bit_cast<std::uint32_t>(wrapWidth), flags,
+                                                 HintedAdvances() ? std::bit_cast<std::uint32_t>(params_.pixelsPerUnit) : 0u};
                 // a widget measures a text and then draws it: the same layout again, found without hashing
                 if (lastLayout_ && lastLayout_->text == text && std::memcmp(lastLayout_->params, params, sizeof(params)) == 0)
                 {
@@ -1248,6 +1281,10 @@ namespace esia::text
                     const hb_glyph_info_t* info = hb_buffer_get_glyph_infos(buffer_, &n);
                     const hb_glyph_position_t* pos = hb_buffer_get_glyph_positions(buffer_, nullptr);
                     const float k = runSize / face.upem;
+                    // hinted advances: the glyph's hinted width at this size and density on whole pixels, plus what the
+                    // shaping added (kerning, marks), rounded to whole pixels too
+                    const bool hinted = HintedAdvances() && face.ft && !face.platform && !face.bitmap && !face.colorStrikes;
+                    const float ppu = params_.pixelsPerUnit, ppem = runSize * ppu;
                     const std::size_t first = glyphs_.size();
                     for (unsigned i = 0; i < n; ++i)
                     {
@@ -1256,6 +1293,13 @@ namespace esia::text
                         g.glyph = (std::uint16_t)info[i].codepoint;
                         g.advance = (float)pos[i].x_advance * k;
                         g.offset = Vec2((float)pos[i].x_offset * k, -(float)pos[i].y_offset * k);
+                        if (hinted)
+                        {
+                            const float linear = (float)hb_font_get_glyph_h_advance(face.hb, info[i].codepoint);
+                            const float shaped = ((float)pos[i].x_advance - linear) * ppem / face.upem;
+                            g.advance = ((float)HintedAdvance(run.face, g.glyph, ppem) + std::round(shaped)) / ppu;
+                            g.offset = Vec2(std::round(g.offset.x * ppu) / ppu, std::round(g.offset.y * ppu) / ppu);
+                        }
                         g.cluster = info[i].cluster;
                         g.run = r;
                         const unsigned char b = (unsigned char)para[g.cluster];
@@ -1265,6 +1309,8 @@ namespace esia::text
                             g.glyph = kNoGlyph;
                             g.offset = Vec2();
                             g.advance = b == '\t' ? 4.0f * face.SpaceAdvance() * k : 0.0f;
+                            if (hinted)
+                                g.advance = std::round(g.advance * ppu) / ppu;
                         }
                         glyphs_.push_back(g);
                     }
@@ -1468,32 +1514,140 @@ namespace esia::text
                         return s;
                 if (const GlyphSlot* s = atlas_.Find(key))
                     return s;
-                LoadOutline(face, glyph, (float)q / 16.0f);
+                const bool freetype = LoadOutline(face, glyph, (float)q / 16.0f) && rendering_.rasterizer == GlyphRasterizer::FreeType;
                 const float offsetX = 0.25f * (float)phase;
-                if (!RasterizeGray(outline_, offsetX, bitmap_))
+                if (!(freetype && RenderWithFreeType(*faces_[face], phase, bitmap_)) && !RasterizeGray(outline_, offsetX, bitmap_))
                     bitmap_ = GlyphBitmap{};   // larger than the rasterizer takes: cached as empty, not retried every frame
                 const GlyphSlot* s = atlas_.Add(key, bitmap_, outline_.Bounds());
                 return s ? s : atlas_.Add(key, GlyphBitmap{}, Rect());   // larger than a page: empty too
             }
 
-            // The glyph's outline at `emPixels` into outline_: design units, no hinting, no embedded bitmaps (color
-            // strikes: ColorGlyph)
-            void LoadOutline(std::uint16_t face, std::uint16_t glyph, float emPixels)
+            // The glyph's outline at `emPixels` into outline_ (pixels, y down, the pen at the origin): the design's, or, with
+            // hinting or FreeType's rasterizer, FreeType's at that size (hinted as the rendering asks); no embedded
+            // bitmaps (color strikes: ColorGlyph). True when FreeType's glyph slot holds that sized outline after it (for
+            // RenderWithFreeType); a platform face's outline is always the design's.
+            bool LoadOutline(std::uint16_t face, std::uint16_t glyph, float emPixels)
             {
                 Face& f = *faces_[face];
                 outline_.Clear();
                 if (f.platform)
-                    f.platform->GlyphOutline(glyph, emPixels / f.upem, outline_);
-                else if (FT_Load_Glyph(f.ft, glyph, FT_LOAD_NO_SCALE) == 0 && f.ft->glyph->format == FT_GLYPH_FORMAT_OUTLINE)
                 {
-                    FT_Outline_Funcs funcs{};
-                    funcs.move_to = &SinkMoveTo;
-                    funcs.line_to = &SinkLineTo;
-                    funcs.conic_to = &SinkConicTo;
-                    funcs.cubic_to = &SinkCubicTo;
-                    OutlineSink sink{&outline_, emPixels / f.upem};
-                    FT_Outline_Decompose(&f.ft->glyph->outline, &funcs, &sink);
+                    f.platform->GlyphOutline(glyph, emPixels / f.upem, outline_);
+                    return false;
                 }
+                const bool sized = rendering_.hinting != Hinting::None || rendering_.rasterizer == GlyphRasterizer::FreeType;
+                if (sized && SetSize(f, emPixels) && FT_Load_Glyph(f.ft, glyph, LoadFlags()) == 0 && f.ft->glyph->format == FT_GLYPH_FORMAT_OUTLINE)
+                {
+                    Decompose(f.ft->glyph->outline, 1.0f / 64.0f);   // 26.6 pixels
+                    return true;
+                }
+                if (FT_Load_Glyph(f.ft, glyph, FT_LOAD_NO_SCALE) == 0 && f.ft->glyph->format == FT_GLYPH_FORMAT_OUTLINE)
+                    Decompose(f.ft->glyph->outline, emPixels / f.upem);   // design units
+                return false;
+            }
+
+            void Decompose(const FT_Outline& outline, float scale)
+            {
+                FT_Outline_Funcs funcs{};
+                funcs.move_to = &SinkMoveTo;
+                funcs.line_to = &SinkLineTo;
+                funcs.conic_to = &SinkConicTo;
+                funcs.cubic_to = &SinkCubicTo;
+                OutlineSink sink{&outline_, scale};
+                FT_Outline_Decompose(const_cast<FT_Outline*>(&outline), &funcs, &sink);
+            }
+
+            // ------------------------------------------------------------------ rendering (TextRendering)
+            // FreeType's settings for the rendering: the TrueType interpreter, stem darkening. Faces request their size
+            // again afterwards (a size's prepared hints belong to the interpreter that ran them).
+            void ApplyRendering()
+            {
+                FT_UInt interpreter = rendering_.interpreter == TrueTypeInterpreter::V35 ? TT_INTERPRETER_VERSION_35 : TT_INTERPRETER_VERSION_40;
+                FT_Property_Set(ft_, "truetype", "interpreter-version", &interpreter);
+                FT_Bool noDarkening = rendering_.stemDarkening ? 0 : 1;
+                FT_Property_Set(ft_, "cff", "no-stem-darkening", &noDarkening);
+                FT_Property_Set(ft_, "autofitter", "no-stem-darkening", &noDarkening);
+                for (const std::unique_ptr<Face>& f : faces_)
+                    f->sizeSet = 0;
+                const bool both = rendering_.hinting == Hinting::Auto ||
+                                  (rendering_.hinting == Hinting::Full && rendering_.interpreter == TrueTypeInterpreter::V35);
+                wholePixelPens_ = both || HintedAdvances();
+            }
+
+            // The advances are the hinted ones (TextRendering::hintedAdvances, with hinting that may change them).
+            bool HintedAdvances() const
+            {
+                return rendering_.hintedAdvances && (rendering_.hinting == Hinting::Full || rendering_.hinting == Hinting::Auto);
+            }
+
+            FT_Int32 LoadFlags() const
+            {
+                FT_Int32 flags = FT_LOAD_NO_BITMAP;
+                switch (rendering_.hinting)
+                {
+                case Hinting::None: flags |= FT_LOAD_NO_HINTING; break;
+                case Hinting::Light: flags |= FT_LOAD_TARGET_LIGHT; break;
+                case Hinting::Full: flags |= FT_LOAD_TARGET_NORMAL; break;
+                case Hinting::Auto: flags |= FT_LOAD_TARGET_NORMAL | FT_LOAD_FORCE_AUTOHINT; break;
+                }
+                return flags;
+            }
+
+            // The face at `emPixels` per em for FreeType's sized (hinted) loads. Requesting a size runs a TrueType
+            // font's preparation program: only when the size changes.
+            bool SetSize(Face& f, float emPixels)
+            {
+                const FT_F26Dot6 size = (FT_F26Dot6)std::lround(std::clamp(emPixels, 1.0f, 16384.0f) * 64.0f);
+                if (f.sizeSet == size)
+                    return true;
+                if (FT_Set_Char_Size(f.ft, 0, size, 72, 72) != 0)
+                {
+                    f.sizeSet = 0;
+                    return false;
+                }
+                f.sizeSet = size;
+                return true;
+            }
+
+            // The hinted advance width of `glyph` at `ppem` (physical pixels per em), in whole pixels.
+            int HintedAdvance(std::uint16_t face, std::uint16_t glyph, float ppem)
+            {
+                const std::uint32_t size = (std::uint32_t)std::lround(std::clamp(ppem, 1.0f, 16384.0f) * 64.0f);
+                const std::uint64_t key = ((std::uint64_t)face << 48) | ((std::uint64_t)glyph << 32) | size;
+                if (const auto it = hintedAdvanceCache_.find(key); it != hintedAdvanceCache_.end())
+                    return it->second;
+                Face& f = *faces_[face];
+                FT_Fixed advance = 0;   // 16.16 pixels
+                int px = 0;
+                if (SetSize(f, ppem) && FT_Get_Advance(f.ft, glyph, LoadFlags(), &advance) == 0)
+                    px = (int)((advance + 0x8000) >> 16);
+                hintedAdvanceCache_.emplace(key, px);
+                return px;
+            }
+
+            // FreeType's rasterizer on the outline LoadOutline left in the face's glyph slot, moved right by the pen's
+            // phase (quarter pixels): 8-bit coverage. False when it cannot (the caller rasterizes the outline itself).
+            bool RenderWithFreeType(Face& f, int phase, GlyphBitmap& out)
+            {
+                FT_GlyphSlot slot = f.ft->glyph;
+                if (phase != 0)
+                    FT_Outline_Translate(&slot->outline, 16 * phase, 0);   // 26.6: a quarter pixel is 16
+                if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL) != 0 || slot->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY)
+                    return false;
+                const FT_Bitmap& b = slot->bitmap;
+                out = GlyphBitmap{};
+                out.left = slot->bitmap_left;
+                out.top = -slot->bitmap_top;
+                out.width = (int)b.width;
+                out.height = (int)b.rows;
+                out.pixels.resize((std::size_t)out.width * (std::size_t)out.height);
+                for (int y = 0; y < out.height; ++y)
+                {
+                    // rows top first with a positive pitch; from the bottom with a negative one
+                    const unsigned char* row = b.pitch >= 0 ? b.buffer + (std::ptrdiff_t)y * b.pitch : b.buffer + (std::ptrdiff_t)(out.height - 1 - y) * -b.pitch;
+                    std::memcpy(out.pixels.data() + (std::size_t)y * (std::size_t)out.width, row, (std::size_t)out.width);
+                }
+                return true;
             }
 
             // A glyph grown by an outline's width (`widthQ`, 1/8 px: OutlineQ), in the gray atlas beside the glyphs. Its
@@ -1508,7 +1662,7 @@ namespace esia::text
                                           ((std::uint64_t)(widthQ & 0xFF) << 22) | (q << 2) | (std::uint64_t)(phase & 3);
                 if (const GlyphSlot* s = atlas_.Find(key))
                     return s;
-                LoadOutline(face, glyph, (float)q / 16.0f);
+                (void)LoadOutline(face, glyph, (float)q / 16.0f);
                 if (!RasterizeGrown(outline_, 0.25f * (float)phase, (float)widthQ / 8.0f, bitmap_))
                     bitmap_ = GlyphBitmap{};
                 const GlyphSlot* s = atlas_.Add(key, bitmap_, outline_.Bounds());
@@ -1560,6 +1714,7 @@ namespace esia::text
                 bitmap_ = GlyphBitmap{};
                 bitmap_.channels = 4;
                 Rect ink;
+                faces_[face]->sizeSet = 0;   // a strike replaces the size hinted loads set
                 if (strike >= 0 && FT_Select_Size(ft, strike) == 0 && FT_Load_Glyph(ft, glyph, FT_LOAD_COLOR) == 0 &&
                     (ft->glyph->format == FT_GLYPH_FORMAT_BITMAP || FT_Render_Glyph(ft->glyph, FT_RENDER_MODE_NORMAL) == 0) &&
                     ft->glyph->bitmap.pixel_mode == FT_PIXEL_MODE_BGRA && ft->glyph->bitmap.width > 0 && ft->glyph->bitmap.rows > 0)
@@ -1908,12 +2063,24 @@ namespace esia::text
             std::vector<RunGlyph> ellipsis_;
             Outline outline_;
             GlyphBitmap bitmap_;
+
+            // TextRendering: in use, and asked for (SetRendering; it takes over at the next NewFrame)
+            TextRendering rendering_, pending_;
+            bool wholePixelPens_ = false;   // the outlines are hinted across too (vertical stems), or the advances: pens on whole pixels
+            std::unordered_map<std::uint64_t, int, IntHash> hintedAdvanceCache_;   // face, glyph, 26.6 ppem -> pixels
         };
     }
 
     std::unique_ptr<TextSystem> CreateFreeTypeTextSystem(TextureRegistry& textures, const FreeTypeDesc& desc)
     {
-        auto system = std::make_unique<FreeTypeTextSystem>(textures, desc);
+        FreeTypeDesc d = desc;
+        if (const char* spec = std::getenv("ESIA_TEXT_RENDERING"); spec && *spec)
+        {
+            std::string error;
+            if (!ParseTextRendering(spec, d.rendering, &error))
+                std::fprintf(stderr, "esia: ESIA_TEXT_RENDERING: %s (ignored)\n", error.c_str());
+        }
+        auto system = std::make_unique<FreeTypeTextSystem>(textures, d);
         if (!system->Init())
             return nullptr;
         return system;

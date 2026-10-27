@@ -6,13 +6,16 @@
 // A TextSystem shapes UTF-8 text, rasterizes glyphs into atlas pages it owns in the TextureRegistry and emits
 // glyph quads into a DrawList (Geometry commands on those pages). Glyph pages are Alpha8 coverage, which the renderer
 // recognizes from the page's TextureInfo and draws with its text pipeline, so text needs no special draw commands.
-// Text is antialiased in grayscale on every platform: there is no sub-pixel (LCD / ClearType) text. Bitmap fonts draw
-// their own pixels (freetype.hpp).
+// Text is antialiased in grayscale on every platform: there is no sub-pixel (LCD / ClearType) text. How outlines become
+// pixels - hinting, the rasterizer - is a text system's TextRendering (the design's outlines unless asked otherwise).
+// Bitmap fonts draw their own pixels (freetype.hpp).
 //
 // Threading: a TextSystem belongs to one UI thread (like the Context that uses it).
 #pragma once
 #include "esia/base/math.hpp"
 #include "esia/base/utf8.hpp"
+#include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -69,6 +72,82 @@ namespace esia::text
         constexpr bool Visible() const { return width > 0.0f && color.a > 0.0f; }
     };
 
+    // How glyph outlines become pixels (TextSystem::SetRendering; the FreeType text system also takes it from
+    // FreeTypeDesc::rendering and the ESIA_TEXT_RENDERING environment variable). The default is the design's outline as
+    // it is: no hinting, exact area coverage (Esia's analytic rasterizer), the pen at quarter pixels - shapes, weights
+    // and spacing true to the font at every size and density, and one layout at every density. Hinting first fits the
+    // outline to the pixel grid: crisper small text on a low-density display, at the cost of the design's exact shapes
+    // (and, with hinted advances, of a layout independent of the density). Fonts drawn by the platform (Apple's Core
+    // Text faces), color glyphs and bitmap fonts are not hinted.
+    enum class Hinting : std::uint8_t
+    {
+        None,    // the design's outline
+        Light,   // vertical only: baselines, x-heights and horizontal stems on whole pixels; widths and spacing unchanged
+        Full,    // the font's own hints: its TrueType instructions (as `TrueTypeInterpreter` runs them), its CFF hints
+        Auto,    // FreeType's autohinter, the font's own hints left aside (fonts with poor hints or none)
+    };
+
+    enum class TrueTypeInterpreter : std::uint8_t
+    {
+        V40,   // FreeType's default: the instructions' vertical part only, as fonts made for ClearType expect it
+        V35,   // the classic interpreter, both directions: the shapes of black-and-white and grayscale GDI text
+    };
+
+    enum class GlyphRasterizer : std::uint8_t
+    {
+        Analytic,   // Esia's (glyph_raster.hpp): exact area coverage, the same whichever library read the font
+        FreeType,   // FreeType's anti-aliasing rasterizer (the FreeType text system; others draw Analytic)
+    };
+
+    struct TextRendering
+    {
+        Hinting hinting = Hinting::None;
+        TrueTypeInterpreter interpreter = TrueTypeInterpreter::V40;   // Full hinting of TrueType fonts
+        GlyphRasterizer rasterizer = GlyphRasterizer::Analytic;
+        bool stemDarkening = false;    // FreeType's darkening of thin stems at small sizes (CFF fonts, the autohinter)
+        // Full or Auto hinting: the layout takes the hinted advance widths, on whole pixels, instead of the design's -
+        // as GDI-era text did. A text's width then depends on the density (Measure gives the width at the density of
+        // the last NewFrame), and the pen stays on whole pixels.
+        bool hintedAdvances = false;
+
+        bool operator==(const TextRendering&) const = default;
+
+        // The design's outlines (the default).
+        static constexpr TextRendering Design() { return {}; }
+        // Light hinting: sharper horizontals, the design's widths.
+        static constexpr TextRendering Light()
+        {
+            TextRendering r;
+            r.hinting = Hinting::Light;
+            return r;
+        }
+        // GDI-era sharpness: the fonts' own hints in both directions (the classic interpreter), FreeType's rasterizer,
+        // hinted advances on whole pixels.
+        static constexpr TextRendering Crisp()
+        {
+            TextRendering r;
+            r.hinting = Hinting::Full;
+            r.interpreter = TrueTypeInterpreter::V35;
+            r.rasterizer = GlyphRasterizer::FreeType;
+            r.hintedAdvances = true;
+            return r;
+        }
+    };
+
+    // What the platform's own text looks like: Windows - the fonts' hints with FreeType's default interpreter and
+    // rasterizer; Linux - light hinting, FreeType's rasterizer and stem darkening (the desktops' defaults); Apple and
+    // Android - the design's outlines.
+    ESIA_API TextRendering NativeTextRendering();
+
+    // A rendering from text, for command lines and environment variables: comma-separated presets and settings, later
+    // ones overriding earlier ones -
+    //   design | light | crisp | native
+    //   hinting=none|light|full|auto   interpreter=35|40   rasterizer=analytic|freetype
+    //   stem-darkening[=0|1]   hinted-advances[=0|1]
+    // e.g. "crisp", "native,stem-darkening=0", "hinting=full,interpreter=35". False (and `out` unchanged) on a word it
+    // does not know, which `error` then names.
+    ESIA_API bool ParseTextRendering(std::string_view spec, TextRendering& out, std::string* error = nullptr);
+
     // How glyphs are rasterized this frame.
     struct RasterParams
     {
@@ -91,6 +170,10 @@ namespace esia::text
         // ---- frame
         // Call once per frame before drawing: sets the pixel density and grows / trims the glyph pages.
         virtual void NewFrame(const RasterParams& params) = 0;
+        // How glyphs become pixels from the next NewFrame on (TextRendering); the glyph pages start over when it changes.
+        // A text system without the choice keeps its own: this default ignores it.
+        virtual void SetRendering(const TextRendering& rendering) { (void)rendering; }
+        virtual TextRendering Rendering() const { return {}; }
 
         // ---- layout and drawing (UTF-8)
         virtual TextMetrics Measure(FontRef font, std::string_view text, float wrapWidth = 0.0f, std::uint32_t flags = 0) = 0;

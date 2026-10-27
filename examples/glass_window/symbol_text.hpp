@@ -51,6 +51,8 @@ namespace glass
             if (font != kSymbols)
                 inner_->AddFallback(font);
         }
+        void SetRendering(const esia::text::TextRendering& rendering) override { inner_->SetRendering(rendering); }
+        esia::text::TextRendering Rendering() const override { return inner_->Rendering(); }
         void NewFrame(const esia::text::RasterParams& params) override
         {
             pixelsPerUnit_ = params.pixelsPerUnit > 0.0f ? params.pixelsPerUnit : 1.0f;

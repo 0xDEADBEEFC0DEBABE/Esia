@@ -36,6 +36,7 @@ namespace glass
             int frames = 0;
             std::string screenshot;
             std::vector<std::string> fonts;
+            std::string textRendering;   // --text-rendering
         };
 
         int Usage(const App& app, const char* problem)
@@ -43,7 +44,7 @@ namespace glass
             std::fprintf(stderr,
                          "%s: %s\n"
                          "usage: %s [--api %s] [--size WxH] [--scale s] [--vsync on|off] [--debug] [--fixed-dt seconds]\n"
-                         "       [--frames N] [--screenshot out.png] [--font file]...\n",
+                         "       [--frames N] [--screenshot out.png] [--font file]... [--text-rendering spec]\n",
                          app.name, problem, app.name, BuiltApis().c_str());
             return 2;
         }
@@ -87,6 +88,12 @@ namespace glass
                     o.screenshot = value;
                 else if (a == "--font" && needs())
                     o.fonts.push_back(value);
+                else if (a == "--text-rendering" && needs())
+                {
+                    o.textRendering = value;
+                    if (!TextRenderingValid(o.textRendering, problem))
+                        return false;
+                }
                 else if (app.option && app.option(a, value, usedValue))
                     i += usedValue ? 1 : 0;
                 else if (problem.empty())
@@ -152,6 +159,7 @@ namespace glass
             std::unique_ptr<esia::text::TextSystem> textSystem;   // FreeType, and the icon theme for kSystemSymbolsFont
             if (std::unique_ptr<esia::text::TextSystem> ft = esia::text::CreateFreeTypeTextSystem(ctx.Textures()))
                 textSystem = std::make_unique<SymbolTextSystem>(std::move(ft), ctx.Textures(), &linux_icons::Rasterize);
+            ApplyTextRendering(textSystem.get(), opt.textRendering);
             if (textSystem && !app.loadFonts)
                 text = textSystem.get();
             else if (textSystem && (font = LoadFonts(*textSystem, opt.fonts)) != 0)
