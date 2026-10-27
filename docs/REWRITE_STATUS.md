@@ -42,6 +42,10 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**Temporal reuse of the backdrop** (2026-10-28, in Esia): glass captures reused from frame to frame when what lies
+under them did not change (`RenderParams::targetStatic`), or for a few frames over a live background
+(`backdropReuseFrames`); both opt-in.
+
 **Instanced glyphs and tiles** (2026-10-28, in Esia): glyphs and flat tiles as 32-byte quad instances expanded on the
 GPU (four new programs on every backend); a benchmark of fixed scenes (`esia_bench`). Text: build -43%, upload -69%,
 GPU -60% on Direct3D 11.
@@ -112,6 +116,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Temporal reuse of the backdrop](#temporal-reuse-of-the-backdrop)
 * [Instanced glyphs and tiles](#instanced-glyphs-and-tiles)
 * [Smooth motion and legible text](#smooth-motion-and-legible-text)
 * [Distance-field text](#distance-field-text)
@@ -145,6 +150,60 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Temporal reuse of the backdrop
+
+One of the owner's picks: the glass's backdrop capture (a copy and a blur pyramid) taken again only when it has to be.
+
+### What changed
+
+* Planner (`FramePlan::keyCaptures`, `KeyCaptures`): every capture gets a key - its region and pyramid mixed with
+  every op before it that touches the region, in order (kind, state, data: FX instances, quads, the vertices of
+  geometry); every op before it when one of those reads the backdrop itself or is a glow layer. 0 when it cannot be
+  told: a host callback, content that animates on the shader's clock (shimmer, a light streak without its own clock,
+  user effects), more than 256 KB of data in one op. `RenderOp::captureShape`: the region and pyramid alone.
+* Renderer: `RenderParams::targetStatic` (the host gives the target the same content before every frame) reuses a
+  capture whose key is last frame's; `backdropReuseFrames` reuses one of the same shape for that many frames whatever
+  changed (a live background, the frost that many frames old). Captures share the copy and the pyramid, and the next
+  capture writes over a capture's margins, so a kept capture whose levels were written over is brought back from a copy
+  of them kept aside (made before the frame's passes for captures whose content stayed the same): a few
+  `CopyTexture`s instead of a copy, a blur and its passes. The pyramid passes load instead of DontCare while captures
+  are kept; the levels and the backdrop copy are copy sources and destinations. `RenderStats::reusedCaptures`,
+  `restoredCaptures`.
+* Conformance: `Scene::repeat` draws a frame several times on one renderer (the target cleared before each, with
+  `targetStatic`) and checks the last; the scene `glass_reused` is the glass scene three times, against its golden.
+  `esia_bench`: `glass-static`, `glass-live` (the stripes scroll), `glass-live-2` (reused for two frames); the bench
+  turns the Vulkan validation layer off (`ESIA_VULKAN_VALIDATION=0` unless set).
+
+### Measured (`esia_bench`, 20 glass panels with titles, 1600 x 1000, RTX 4080 SUPER, medians)
+
+| backend | glass: submit / GPU ms | glass-static | glass-live-2 |
+| --- | --- | --- | --- |
+| Direct3D 11 | 0.042 / 0.412 | 0.039 / 0.369 | 0.044 / 0.373 |
+| Direct3D 12 | 0.143 / 0.403 | 0.162 / 0.369 | |
+| Vulkan | 0.198 / 0.550 | 0.179 / 0.457 | 0.190 / 0.463 |
+| OpenGL | 1.095 / 0.887 | 0.997 / 0.692 | |
+
+121 draw calls become 41. The panels lie close together, so every capture of `glass-static` comes back from its copy
+aside (20 restores a frame); a lone glass window is reused without a copy. The glass's own shading, not its capture,
+is most of the GPU time here: 6 to 22 % saved on these desktop backends. Tile-based GPUs (Apple, mobile), where each
+capture ends and restarts a render pass, should gain more; not measured.
+
+### Verified
+
+* Unit tests (null device): an unchanged capture reused without a pass, taken again when something under it changes,
+  without the promise, or under a shimmer; glass on glass restored from the copies aside from the third frame on, with
+  no pyramid pass and no texture made; `backdropReuseFrames` over a changing background (taken, reused twice, taken
+  ...), a moved capture taken at once.
+* `glass_reused` on D3D9, D3D10, D3D11, D3D12, OpenGL, GLES and Vulkan within the glass golden's tolerance (the same
+  deltas as `glass`); its null log shows the third frame's restores; ctest 37 / 37.
+
+### Not done
+
+* The example and EsiaGUI do not set `targetStatic` yet (their hosts clear or not per backend); an app that draws its
+  whole background with Esia can.
+* Captures that write over each other are restored every frame (copies); separate storage per capture would keep
+  them, at more memory.
 
 ## Instanced glyphs and tiles
 

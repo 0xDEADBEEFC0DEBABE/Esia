@@ -96,6 +96,28 @@ namespace esia::render
         // stores garbage where the pass did not write)
         bool levelDefined[kBackdropLevels] = {};
 
+        // Temporal reuse (RenderParams::targetStatic / backdropReuseFrames). Every capture - a region and pyramid,
+        // RenderOp::captureShape - is kept from frame to frame: what it saw, whether its levels are still in the copy
+        // and the pyramid (nothing wrote over the region its glass reads since), and a copy of them aside, which brings
+        // them back when something did: neighbouring captures share the pyramid and write over each other's margins,
+        // so most captures of a page of glass would be taken again every frame. The copies aside are made, before a
+        // frame's passes, for the captures whose content did not change since the last frame.
+        struct KeptCapture
+        {
+            std::uint64_t shape = 0, key = 0;   // RenderOp::captureShape / the captureKey of what its levels hold
+            PxRect wrote, read, level0;         // where it writes the pyramid; where its glass reads; what it copied
+            int levels = 0;
+            int age = 0;                        // frames since it was taken (a reuse of the same content is as new)
+            bool intact = false;                // its levels are in the copy and the pyramid
+            bool cached = false;                // ... and in `cache`
+            bool planned = false, done = false;   // in this frame's plan; served this frame
+            rhi::Texture cache[kBackdropLevels];   // [0] its part of the copy, [l] its texels of level l
+        };
+        static constexpr std::size_t kMaxKept = 64;
+        std::vector<KeptCapture> kept;
+        bool reuseExact = false;
+        int reuseFrames = 0;
+
         // this frame
         rhi::Texture target;
         rhi::TextureDesc targetDesc;
@@ -138,6 +160,10 @@ namespace esia::render
 
         void ReleaseSurfaces()
         {
+            for (KeptCapture& k : kept)   // the captures they held are gone
+                for (rhi::Texture& t : k.cache)
+                    Release(t);
+            kept.clear();
             Release(copy);
             for (rhi::Texture& l : levels)
                 Release(l);
@@ -197,13 +223,15 @@ namespace esia::render
                 // zeroed: glass past the capture budget or a user effect may read where no capture copied yet
                 const rhi::Format f = rhi::RawFormat(targetDesc.format);
                 const std::vector<std::uint8_t> zeros((std::size_t)W * (std::size_t)H * (std::size_t)rhi::BytesPerPixel(f), 0);
-                ok = (bool)(copy = MakeTexture(W, H, f, rhi::TextureUsage_Sampled | rhi::TextureUsage_CopyDst, "backdrop-copy", zeros.data()));
+                ok = (bool)(copy = MakeTexture(W, H, f, rhi::TextureUsage_Sampled | rhi::TextureUsage_CopyDst | rhi::TextureUsage_CopySrc, "backdrop-copy",
+                                               zeros.data()));
             }
+            // copied from and to as well: captures kept aside for temporal reuse
+            const std::uint32_t levelUsage = rhi::TextureUsage_RenderTarget | rhi::TextureUsage_Sampled | rhi::TextureUsage_CopySrc | rhi::TextureUsage_CopyDst;
             for (int l = 1; ok && l < kBackdropLevels; ++l)
                 if (!levels[l])
                 {
-                    ok = (bool)(levels[l] = MakeTexture(LevelSize(W, l), LevelSize(H, l), LayerFormat(), rhi::TextureUsage_RenderTarget | rhi::TextureUsage_Sampled,
-                                                        kLevelNames[l]));
+                    ok = (bool)(levels[l] = MakeTexture(LevelSize(W, l), LevelSize(H, l), LayerFormat(), levelUsage, kLevelNames[l]));
                     levelDefined[l] = false;
                 }
             if (ok && glowLayer && !layer)
@@ -725,13 +753,162 @@ namespace esia::render
             }
         }
 
+        // ------------------------------------------------------------ temporal reuse
+        // Something wrote `region` of the copy and the pyramid: the kept captures whose glass reads there lost their
+        // levels (`self`, which wrote it, has them now).
+        void Wrote(const PxRect& region, const KeptCapture* self)
+        {
+            for (KeptCapture& k : kept)
+                if (&k != self && k.read.Overlaps(region))
+                    k.intact = false;
+        }
+
+        KeptCapture* FindKept(std::uint64_t shape)
+        {
+            for (KeptCapture& k : kept)
+                if (k.shape == shape)
+                    return &k;
+            return nullptr;
+        }
+
+        // The texels of level l a capture over `region` writes (BuildPyramid's), and the part of the copy it writes
+        PxRect LevelRegion(const PxRect& region, int l) const
+        {
+            return PyramidStep::First(region, W, H).Next(region, l, LevelSize(W, l), LevelSize(H, l));
+        }
+        PxRect Level0Region(const PxRect& region, const RenderOp& op) const
+        {
+            if (!canRead)
+                return region;
+            const PxRect want0 = op.captureLevel0 ? op.captureLevel0Region.Intersect(region) : PxRect{};
+            return canCopy && !want0.Empty() ? AlignCopyRegion(want0, W, H) : PxRect{};
+        }
+
+        // Before the frame's passes (textures are made then, rhi.hpp): a kept capture for every capture of the plan, a
+        // copy aside for those whose content is the one they hold - or for every one, where captures serve frames
+        // whatever changed - and the kept captures the frame no longer has released.
+        void PrepareKept()
+        {
+            for (KeptCapture& k : kept)
+                k.planned = k.done = false;
+            if (!plan.keyCaptures || !backdrop)
+            {
+                ReleaseKept();
+                return;
+            }
+            for (const RenderOp& op : plan.ops)
+            {
+                if (op.type != RenderOp::FxBatch || op.captureRegion.Empty())
+                    continue;
+                KeptCapture* k = FindKept(op.captureShape);
+                if (!k)
+                {
+                    if (kept.size() >= kMaxKept)
+                        continue;
+                    kept.emplace_back().shape = op.captureShape;
+                    k = &kept.back();
+                }
+                k->planned = true;
+                const bool stable = reuseFrames > 0 || (reuseExact && op.captureKey != 0 && k->key == op.captureKey);
+                if (!stable || k->cache[1] || k->cache[0])
+                    continue;
+                const PxRect region = AlignCaptureRegion(op.captureRegion, W, H);
+                for (int l = 1; l <= std::min(op.captureLevels, kBackdropLevels - 1); ++l)
+                {
+                    const PxRect r = LevelRegion(region, l);
+                    if (!r.Empty())
+                        k->cache[l] = MakeTexture((int)(r.x1 - r.x0), (int)(r.y1 - r.y0), LayerFormat(),
+                                                  rhi::TextureUsage_RenderTarget | rhi::TextureUsage_Sampled | rhi::TextureUsage_CopySrc |
+                                                      rhi::TextureUsage_CopyDst,
+                                                  "kept-capture");
+                }
+                const PxRect r0 = Level0Region(region, op);
+                if (!r0.Empty())
+                    k->cache[0] = MakeTexture((int)(r0.x1 - r0.x0), (int)(r0.y1 - r0.y0), rhi::RawFormat(targetDesc.format),
+                                              rhi::TextureUsage_RenderTarget | rhi::TextureUsage_Sampled | rhi::TextureUsage_CopySrc | rhi::TextureUsage_CopyDst,
+                                              "kept-capture-0");
+            }
+            for (std::size_t i = 0; i < kept.size();)
+            {
+                if (kept[i].planned)
+                {
+                    ++i;
+                    continue;
+                }
+                for (rhi::Texture& t : kept[i].cache)
+                    Release(t);
+                kept.erase(kept.begin() + (std::ptrdiff_t)i);
+            }
+        }
+
+        void ReleaseKept()
+        {
+            for (KeptCapture& k : kept)
+                for (rhi::Texture& t : k.cache)
+                    Release(t);
+            kept.clear();
+        }
+
+        // `op`'s capture from an earlier frame: the same content (RenderParams::targetStatic) or, within
+        // backdropReuseFrames, the same region - its levels still in the pyramid, or brought back from the copy aside.
+        bool ReuseCapture(const RenderOp& op)
+        {
+            KeptCapture* k = plan.keyCaptures ? FindKept(op.captureShape) : nullptr;
+            if (!k || k->done || !(k->intact || k->cached))
+                return false;
+            const bool same = reuseExact && op.captureKey != 0 && k->key == op.captureKey;
+            if (!same && !(reuseFrames > 0 && k->age < reuseFrames))
+                return false;
+            if (!k->intact)
+            {
+                ProfileRun(RunCapture);
+                EndPass();
+                for (int l = 0; l <= k->levels && l < kBackdropLevels; ++l)
+                {
+                    const PxRect r = l == 0 ? k->level0 : LevelRegion(k->wrote, l);
+                    if (k->cache[l] && !r.Empty())
+                        dev.CopyTexture(l == 0 ? copy : levels[l], (int)r.x0, (int)r.y0, k->cache[l], rhi::IRect{0, 0, (int)(r.x1 - r.x0), (int)(r.y1 - r.y0)});
+                }
+                Wrote(k->wrote, k);
+                k->intact = true;
+                ++stats.restoredCaptures;
+            }
+            k->age = same ? k->age : k->age + 1;   // its key stays the content the levels hold
+            k->done = true;
+            return true;
+        }
+
+        // `op`'s capture was just taken: kept, and copied aside where PrepareKept made room for it.
+        void KeepCapture(const RenderOp& op, const PxRect& region, const PxRect& level0)
+        {
+            KeptCapture* k = plan.keyCaptures ? FindKept(op.captureShape) : nullptr;
+            Wrote(region, k);
+            if (!k)
+                return;
+            k->key = op.captureKey;
+            k->wrote = region;
+            k->read = op.captureRegion;
+            k->level0 = level0;
+            k->levels = op.captureLevels;
+            k->age = 0;
+            k->intact = true;
+            k->done = true;
+            k->cached = k->cache[1] || k->cache[0];
+            for (int l = 0; l <= k->levels && l < kBackdropLevels; ++l)
+            {
+                const PxRect r = l == 0 ? level0 : LevelRegion(region, l);
+                if (k->cache[l] && !r.Empty())
+                    dev.CopyTexture(k->cache[l], 0, 0, l == 0 ? copy : levels[l], rhi::IRect{(int)r.x0, (int)r.y0, (int)r.x1, (int)r.y1});
+            }
+        }
+
         // `level0`: the part of the capture that glass reads at full resolution (clear glass, user effects), empty
-        // when every batch it serves is frosted.
-        void CaptureBackdrop(const PxRect& wanted, int count, const PxRect& level0)
+        // when every batch it serves is frosted. Returns the part of the copy it wrote.
+        PxRect CaptureBackdrop(const PxRect& wanted, int count, const PxRect& level0)
         {
             const PxRect region = AlignCaptureRegion(wanted, W, H);
             if (region.Empty())
-                return;
+                return {};
             ProfileRun(RunCapture);
             EndPass();
             // A target that can be read builds the pyramid straight from itself - the same values as from a copy,
@@ -748,12 +925,11 @@ namespace esia::render
                 else
                     ++stats.directCaptures;
                 BuildPyramid(target, region, canCopy ? count : std::max(count, 1));
+                return r0;
             }
-            else
-            {
-                dev.CopyTexture(copy, (int)region.x0, (int)region.y0, target, rhi::IRect{(int)region.x0, (int)region.y0, (int)region.x1, (int)region.y1});
-                BuildPyramid(copy, region, count);
-            }
+            dev.CopyTexture(copy, (int)region.x0, (int)region.y0, target, rhi::IRect{(int)region.x0, (int)region.y0, (int)region.x1, (int)region.y1});
+            BuildPyramid(copy, region, count);
+            return region;
         }
 
         void BeginLayer(const RenderOp& op)
@@ -783,6 +959,7 @@ namespace esia::render
             EndPass();
             const PxRect region = AlignCaptureRegion(op.bounds, W, H);
             BuildPyramid(layer, region, LevelsForBloom(op.blurPx));
+            Wrote(region, nullptr);   // the bloom pyramid is the backdrop's
             EnsureContentPass();
             if (BindPipeline(GetPipeline(rhi::ShaderProgram::LayerComposite, rhi::BlendMode::Premultiplied)) && SetScissor(op.bounds))
             {
@@ -873,10 +1050,13 @@ namespace esia::render
             // captures are planned per frame (FramePlan::PlanCaptures): one serves many glass batches
             if (op.glass && !op.captureRegion.Empty() && backdrop)
             {
-                if (captures < budget)
+                if (ReuseCapture(op))
+                    ++stats.reusedCaptures;
+                else if (captures < budget)
                 {
-                    CaptureBackdrop(op.captureRegion, op.captureLevels, op.captureLevel0 ? op.captureLevel0Region : PxRect{});
+                    const PxRect level0 = CaptureBackdrop(op.captureRegion, op.captureLevels, op.captureLevel0 ? op.captureLevel0Region : PxRect{});
                     ++captures;
+                    KeepCapture(op, AlignCaptureRegion(op.captureRegion, W, H), level0);
                 }
                 else
                     stats.overBudget = true;
@@ -1030,6 +1210,9 @@ namespace esia::render
             subpixelText = params.subpixelText;
 
             ApplyTextureChanges(registry);
+            reuseExact = params.targetStatic;
+            reuseFrames = std::max(0, params.backdropReuseFrames);
+            plan.keyCaptures = reuseExact || reuseFrames > 0;
             plan.Build(dd, [this](TextureId id, TextureInfo& out) {
                 auto it = textures.find(id);
                 if (it == textures.end())
@@ -1064,7 +1247,10 @@ namespace esia::render
             bool userEffects = false;
             for (const RenderOp& op : plan.ops)
                 userEffects |= op.type == RenderOp::FxBatch && op.effect != 0;
-            keepLevels = backdrop && (plan.plannedCaptures > budget || (userEffects && caps.runtimeEffects));
+            // the levels keep what they hold outside the regions a frame writes when glass may read it: past the capture
+            // budget, user effects, and captures kept for the next frame
+            keepLevels = backdrop && (plan.plannedCaptures > budget || (userEffects && caps.runtimeEffects) || plan.keyCaptures);
+            PrepareKept();
             profile = params.profile;
             profileScopes = 0;
             maxProfileScopes = std::max(0, params.maxProfileScopes);

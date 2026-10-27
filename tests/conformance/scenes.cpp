@@ -793,6 +793,12 @@ namespace esia::conformance
                                   &Text);
             quadRows.golden = "text";
             quadRows.fxInstancesPerRow = 2;
+            Scene& reused = add("glass_reused", "the glass scene three times with RenderParams::targetStatic: the third frame's captures come from the "
+                                                "pyramid or from the copies kept aside (temporal reuse), with the same pixels",
+                                &GlassScene);
+            reused.golden = "glass";
+            reused.tolerance = glassTolerance;
+            reused.repeat = 3;
             return s;
         }
 
@@ -849,6 +855,7 @@ namespace esia::conformance
     {
         render::RenderParams params;
         params.maxFxInstancesPerRow = scene.fxInstancesPerRow;
+        params.targetStatic = scene.repeat > 1;
         return params;
     }
 }

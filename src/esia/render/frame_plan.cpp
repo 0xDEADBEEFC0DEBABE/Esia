@@ -4,6 +4,7 @@
 #include "gpu_constants.hpp"
 #include <cfloat>
 #include <cmath>
+#include <cstring>
 
 namespace esia::render
 {
@@ -653,7 +654,11 @@ namespace esia::render
             }
         }
         if (anyGlass)
+        {
             PlanCaptures();
+            if (keyCaptures)
+                KeyCaptures();
+        }
     }
 
     // ------------------------------------------------------------------ capture planning
@@ -728,7 +733,135 @@ namespace esia::render
         };
 
         float Area(const PxRect& r) { return r.Empty() ? 0.0f : (r.x1 - r.x0) * (r.y1 - r.y0); }
+
+        // KeyCaptures' hash: 8-byte words mixed in (a multiply-xorshift; not cryptographic - a key that matched by
+        // chance would show a stale frost for a frame).
+        inline std::uint64_t Mix(std::uint64_t h, std::uint64_t v)
+        {
+            h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+            h *= 0xBF58476D1CE4E5B9ull;
+            return h ^ (h >> 31);
+        }
+        std::uint64_t MixBytes(std::uint64_t h, const void* data, std::size_t n)
+        {
+            const auto* p = static_cast<const unsigned char*>(data);
+            for (; n >= 8; n -= 8, p += 8)
+            {
+                std::uint64_t v;
+                std::memcpy(&v, p, 8);
+                h = Mix(h, v);
+            }
+            std::uint64_t v = 0;
+            std::memcpy(&v, p, n);
+            return Mix(h, v ^ (std::uint64_t)n);
+        }
+        std::uint64_t MixRect(std::uint64_t h, const PxRect& r) { return MixBytes(h, &r, sizeof(r)); }
+        // an instance whose pixels change with the shader's clock alone: a shimmer, a light streak without a clock of
+        // its own, a user effect (it may read gTime)
+        bool Animated(const fx::Instance& in)
+        {
+            const std::uint32_t f = in.flags[0];
+            return (f & fx::kCustom) || ((f & fx::kShimmer) && in.misc[3] != 0.0f) || ((f & fx::kCaustic) && in.fill1[0] < 0.0f);
+        }
+        constexpr std::size_t kMaxKeyedBytes = 256 * 1024;   // an op with more data than this is not hashed: no reuse
         int LevelsOf(const RenderOp& op) { return op.blurPx < 0.0f ? kBackdropLevels - 1 : LevelsForBlur(op.blurPx); }
+    }
+
+    // Temporal reuse of captures (the renderer, RenderParams::targetStatic): a capture whose region, pyramid and what
+    // was drawn under it are the same as last frame's needs no new copy and blur - last frame's are still in the
+    // pyramid. Each capture's key mixes its region and pyramid with every op before it that touches the region, in
+    // order (their kind, state and data); when one of them reads the backdrop itself (glass, a user effect) or is a
+    // glow layer, what it shows depends on more than the region: then every op before the capture is mixed in.
+    void FramePlan::KeyCaptures()
+    {
+        opHash_.assign(ops.size(), 0);
+        for (std::size_t i = 0; i < ops.size(); ++i)
+        {
+            RenderOp& c = ops[i];
+            if (c.type != RenderOp::FxBatch || c.captureRegion.Empty())
+                continue;
+            std::uint64_t shape = MixRect(Mix(0x51ED270B27BB09ADull, (std::uint64_t)c.captureLevels), c.captureRegion);
+            shape = MixRect(Mix(shape, c.captureLevel0 ? 1u : 0u), c.captureLevel0Region);
+            c.captureShape = shape;
+            bool whole = false;
+            for (std::size_t k = 0; k < i && !whole; ++k)
+            {
+                const RenderOp& o = ops[k];
+                const PxRect touched = o.type == RenderOp::Callback ? o.clip : o.bounds;
+                whole = (o.type == RenderOp::LayerBegin || o.type == RenderOp::LayerEnd || (o.type == RenderOp::FxBatch && o.glass)) &&
+                        (touched.Empty() || touched.Overlaps(c.captureRegion));
+            }
+            std::uint64_t key = shape;
+            for (std::size_t k = 0; k < i; ++k)
+            {
+                const RenderOp& o = ops[k];
+                const PxRect touched = o.type == RenderOp::Callback ? o.clip : o.bounds;
+                if (!whole && !touched.Overlaps(c.captureRegion))
+                    continue;
+                const std::uint64_t h = OpHash(k);
+                if (h == 0)
+                {
+                    key = 0;
+                    break;
+                }
+                key = Mix(key, h);
+            }
+            c.captureKey = key;
+        }
+    }
+
+    // An op's hash: its kind, state and data (0: it cannot be told, see RenderOp::captureKey).
+    std::uint64_t FramePlan::OpHash(std::size_t k)
+    {
+        if (opHash_[k] != 0)
+            return opHash_[k] == 1 ? 0 : opHash_[k];
+        const RenderOp& o = ops[k];
+        std::uint64_t h = Mix(0x2545F4914F6CDD1Dull, (std::uint64_t)o.type);
+        bool known = o.type != RenderOp::Callback;
+        h = Mix(h, ((std::uint64_t)o.texture << 32) | o.effect);
+        h = Mix(h, ((std::uint64_t)o.features << 8) | (o.quads ? 1u : 0u) | (o.coverage ? 2u : 0u) | (o.lcd ? 4u : 0u) | (o.glass ? 8u : 0u));
+        h = MixRect(h, o.clip);
+        h = MixBytes(h, o.fade, sizeof(o.fade));
+        if (o.type == RenderOp::LayerBegin || o.type == RenderOp::LayerEnd)
+            h = MixBytes(MixRect(h, o.bounds), &o.layer, sizeof(o.layer));
+        std::size_t bytes = 0;
+        for (std::uint32_t p = k < opFirst_.size() ? opFirst_[k] : kNoPiece; known && p != kNoPiece; p = pieces_[p].next)
+        {
+            const Piece& pc = pieces_[p];
+            if (pc.inst)
+            {
+                for (std::uint32_t i = 0; i < pc.count && known; ++i)
+                    known = !Animated(pc.inst[i]);
+                bytes += (std::size_t)pc.count * sizeof(fx::Instance);
+                if (known && bytes <= kMaxKeyedBytes)
+                    h = MixBytes(h, pc.inst, (std::size_t)pc.count * sizeof(fx::Instance));
+            }
+            else if (pc.quad)
+            {
+                bytes += (std::size_t)pc.count * sizeof(QuadInstance);
+                if (bytes <= kMaxKeyedBytes)
+                    h = MixBytes(h, pc.quad, (std::size_t)pc.count * sizeof(QuadInstance));
+            }
+            else if (pc.idx)
+            {
+                // the triangles' vertices, through the indices: the list's (a direct plan), or the plan's copy
+                const Vertex* vtx = nullptr;
+                if (!direct)
+                    vtx = vertices.data() + pc.base;
+                else
+                    for (const ListGeometry& l : lists)
+                        if (l.firstVertex == pc.base)
+                            vtx = l.list->Vertices().data();
+                bytes += (std::size_t)pc.count * (sizeof(Vertex) + 4);
+                known = known && vtx != nullptr;
+                for (std::uint32_t i = 0; known && i < pc.count && bytes <= kMaxKeyedBytes; ++i)
+                    h = MixBytes(h, &vtx[pc.idx[i]], sizeof(Vertex));
+            }
+            known = known && bytes <= kMaxKeyedBytes;
+        }
+        h = known ? (h <= 1 ? h + 2 : h) : 1;
+        opHash_[k] = h;
+        return h == 1 ? 0 : h;
     }
 
     void FramePlan::PlanCaptures()

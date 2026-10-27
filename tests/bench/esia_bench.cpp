@@ -1,8 +1,11 @@
 // Esia - the renderer on fixed workloads: what a frame costs the CPU to build (Painter and text into a draw list) and
 // to submit (Renderer::Render: plan, upload, commands), and what it costs the GPU where the device has timestamps.
 //
-//   esia_bench [--backend d3d11] [--scene all|text|widgets|widgets-flat|shapes|glass] [--frames 600] [--warmup 60]
+//   esia_bench [--backend d3d11] [--scene all|text|widgets|widgets-flat|shapes|glass|...] [--frames 600] [--warmup 60]
 //              [--size 1600x1000]
+//
+// The glass scenes: as they are, with RenderParams::targetStatic (unchanged captures reused), with a background that
+// scrolls under the glass ("live"), and that with captures reused for two frames (RenderParams::backdropReuseFrames).
 //
 // Every frame draws the same scene at a fixed clock. The GPU finishes each frame before the next one starts (a
 // one-pixel readback outside the timed parts), so a queue that fills up does not skew the CPU times. Printed per
@@ -15,6 +18,7 @@
 #include "esia/text/freetype.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -48,6 +52,8 @@ namespace
         text::TextSystem* text = nullptr;
         text::FontId font = 0;
         float width = 0, height = 0;
+        double time = 0.0;
+        bool live = false;   // the glass scene's background scrolls
     };
 
     // Lines of the text scene: Latin, Chinese (the characters of tests/fonts' subset) and both mixed.
@@ -108,12 +114,12 @@ namespace
             }
     }
 
-    // Twenty frosted glass panels with a title each over colored stripes.
+    // Twenty frosted glass panels with a title each over colored stripes (scrolling when live).
     void GlassScene(Painter& p, const Bench& b)
     {
-        for (int i = 0; i < 16; ++i)
-            p.Rect(esia::Rect(0, b.height * (float)i / 16.0f, b.width, b.height * (float)(i + 1) / 16.0f),
-                   Style().Fill(Color::Hsv((float)i / 16.0f, 0.7f, 0.8f)));
+        const float band = b.height / 16.0f, shift = b.live ? (float)std::fmod(b.time * 90.0, (double)band) : 0.0f;
+        for (int i = -1; i < 16; ++i)
+            p.Rect(esia::Rect(0, band * (float)i + shift, b.width, band * (float)(i + 1) + shift), Style().Fill(Color::Hsv((float)((i + 16) % 16) / 16.0f, 0.7f, 0.8f)));
         GlassMaterial g;
         g.blur = 10.0f;
         const float w = (b.width - 60.0f) / 5.0f, h = (b.height - 50.0f) / 4.0f;
@@ -130,11 +136,20 @@ namespace
     {
         const char* name;
         void (*draw)(Painter&, const Bench&);
-        bool flat;
+        bool flat = false;
+        bool live = false;
+        bool targetStatic = false;   // RenderParams::targetStatic
+        int reuseFrames = 0;         // RenderParams::backdropReuseFrames
     };
     const SceneDef kScenes[] = {
-        {"text", &TextScene, false},     {"widgets", &WidgetScene, false}, {"widgets-flat", &WidgetScene, true},
-        {"shapes", &ShapeScene, false},  {"glass", &GlassScene, false},
+        {"text", &TextScene},
+        {"widgets", &WidgetScene},
+        {"widgets-flat", &WidgetScene, true},
+        {"shapes", &ShapeScene},
+        {"glass", &GlassScene},
+        {"glass-static", &GlassScene, false, false, true},
+        {"glass-live", &GlassScene, false, true},
+        {"glass-live-2", &GlassScene, false, true, false, 2},
     };
 
     const char* DefaultBackend()
@@ -177,6 +192,16 @@ int main(int argc, char** argv)
         }
     }
 
+    // the driver's time, not the validation layer's: the headless Vulkan device turns it on (with synchronization
+    // validation) unless told otherwise - set ESIA_VULKAN_VALIDATION=1 to measure with it
+    if (!std::getenv("ESIA_VULKAN_VALIDATION"))
+    {
+#if defined(_WIN32)
+        _putenv("ESIA_VULKAN_VALIDATION=0");   // the CRT keeps the string: a literal
+#else
+        setenv("ESIA_VULKAN_VALIDATION", "0", 1);
+#endif
+    }
     rhi::RegisterBuiltinBackends();
     const rhi::BackendInfo* info = rhi::FindBackend(backend);
     if (!info)
@@ -217,8 +242,8 @@ int main(int argc, char** argv)
     const bool readback = hdev.device->GetCaps().readback;
     std::printf("esia_bench: %s on %s, %d x %d, %d frames after %d of warm-up%s\n", backend.c_str(), hdev.adapter.empty() ? "?" : hdev.adapter.c_str(),
                 width, height, frames, warmup, readback ? "" : " (no readback: the GPU is not waited for)");
-    std::printf("%-13s %-17s %-17s %-17s %6s %9s %9s %7s %7s %10s\n", "scene", "build ms (p50/99)", "submit ms", "gpu ms", "draws", "vertices",
-                "indices", "quads", "fx", "upload KB");
+    std::printf("%-13s %-17s %-17s %-17s %6s %9s %9s %7s %7s %10s %9s\n", "scene", "build ms (p50/99)", "submit ms", "gpu ms", "draws", "vertices",
+                "indices", "quads", "fx", "upload KB", "captures");
     for (const SceneDef& sd : kScenes)
     {
         if (scene != "all" && scene != sd.name)
@@ -227,6 +252,11 @@ int main(int argc, char** argv)
         PainterEnv env;
         env.text = ts.get();
         env.flat = sd.flat;
+        b.live = sd.live;
+        render::RenderParams params;
+        params.targetStatic = sd.targetStatic;
+        params.backdropReuseFrames = sd.reuseFrames;
+        int captures = 0, reused = 0, restored = 0;
         DrawList dl;
         Series build, submit, gpu;
         std::uint64_t lastGpuFrame = 0;
@@ -235,6 +265,7 @@ int main(int argc, char** argv)
         for (int f = 0; f < warmup + frames; ++f)
         {
             const double t = (double)f / 60.0;
+            b.time = t;
             const Clock::time_point t0 = Clock::now();
             ts->NewFrame({1.0f, t});
             dl.Reset(esia::Rect(0, 0, b.width, b.height));
@@ -248,7 +279,7 @@ int main(int argc, char** argv)
             dd.displaySize = Vec2(b.width, b.height);
             dd.time = t;
             dd.deltaTime = 1.0f / 60.0f;
-            if (!renderer.Render(dd, &textures, hdev.target))
+            if (!renderer.Render(dd, &textures, hdev.target, params))
             {
                 std::fprintf(stderr, "esia_bench: %s: the device refused frame %d\n", sd.name, f);
                 return 1;
@@ -261,6 +292,9 @@ int main(int argc, char** argv)
                 continue;
             build.v.push_back(Ms(t0, t1));
             submit.v.push_back(Ms(t1, t2));
+            captures += last.backdropCaptures;
+            reused += last.reusedCaptures;
+            restored += last.restoredCaptures;
             if (last.gpu.valid && last.gpu.frame != lastGpuFrame)
             {
                 gpu.v.push_back(last.gpu.totalMs);
@@ -279,8 +313,11 @@ int main(int argc, char** argv)
         const double kb = ((double)last.vertices * sizeof(Vertex) + (double)last.indices * 4.0 + (double)last.quads * sizeof(QuadInstance) +
                            (double)last.fxInstances * sizeof(fx::Instance)) /
                           1024.0;
-        std::printf("%-13s %-17s %-17s %-17s %6d %9d %9d %7d %7d %10.1f\n", sd.name, cols[0], cols[1], cols[2], last.drawCalls, last.vertices, last.indices,
-                    last.quads, last.fxInstances, kb);
+        char caps[48];   // per frame: taken + reused (of them restored from their copy aside)
+        std::snprintf(caps, sizeof(caps), "%.1f+%.1f(%.1f)", (double)captures / (double)frames, (double)reused / (double)frames,
+                      (double)restored / (double)frames);
+        std::printf("%-13s %-17s %-17s %-17s %6d %9d %9d %7d %7d %10.1f %9s\n", sd.name, cols[0], cols[1], cols[2], last.drawCalls, last.vertices,
+                    last.indices, last.quads, last.fxInstances, kb, caps);
     }
     return 0;
 }

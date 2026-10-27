@@ -90,6 +90,11 @@ namespace esia::render
         float fade[4] = {0, 0, 0, 0}; // Draw / FxBatch: edge fade (top y, bottom y, top width, bottom width; px)
         PxRect captureRegion;        // glass batch: capture the backdrop over this region first (empty = reuse)
         int captureLevels = 0;       // pyramid levels that capture must build
+        // glass batch with a capture, planned with FramePlan::keyCaptures: what the capture sees - a hash of its region,
+        // its pyramid and everything drawn before it that touches the region (0: it cannot be told - a host callback,
+        // content that animates on the shader's clock, too much to hash). The renderer reuses last frame's capture of
+        // the same key (RenderParams::targetStatic). captureShape: the region and pyramid alone.
+        std::uint64_t captureKey = 0, captureShape = 0;
         // LayerBegin / LayerEnd
         fx::LayerParams layer{};
         // Callback
@@ -145,12 +150,18 @@ namespace esia::render
         bool anyLayer = false;
         int fxCount = 0;
         int plannedCaptures = 0;
+        // Build keys every capture (RenderOp::captureKey): the renderer sets it when it may reuse captures.
+        bool keyCaptures = false;
 
         void Build(const DrawData& dd, const TextureInfoFn& textureInfo, bool direct = false);
 
     private:
         // Decides before which glass batches the backdrop is captured and over which region (see .cpp).
         void PlanCaptures();
+        // RenderOp::captureKey of every capture (see .cpp).
+        void KeyCaptures();
+        std::uint64_t OpHash(std::size_t k);
+        std::vector<std::uint64_t> opHash_;   // KeyCaptures' scratch: every op's hash, computed when first needed
 
         // Build's scratch: what each op draws, as a chain of runs of instances, indices or quads (see .cpp).
         struct Piece

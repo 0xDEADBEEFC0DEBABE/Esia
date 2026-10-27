@@ -231,7 +231,7 @@ ESIA_TEST(Renderer, SrgbTargetsCopyRawAndEncodeTheirOutput)
     Renderer r(s.dev);
     r.Render(Data({&dl}), nullptr, s.target);
     ESIA_CHECK(NoErrors(s.dev));
-    ESIA_CHECK(Lines(s.dev, "RGBA8_UNORM usage=9 backdrop-copy") == 1);   // the raw sibling of the sRGB target
+    ESIA_CHECK(Lines(s.dev, "RGBA8_UNORM usage=d backdrop-copy") == 1);   // the raw sibling of the sRGB target
     const std::vector<float> main = FrameConstantsAfter(s.dev, "load ui");
     const std::vector<float> layer = FrameConstantsAfter(s.dev, "dont-care glow-layer");
     ESIA_CHECK(main.size() == 48 && layer.size() == 48);
@@ -682,6 +682,119 @@ ESIA_TEST(Renderer, PyramidLevelsKeepTheirContentWhenGlassReusesACapture)
     re.Render(Data({&fx}), nullptr, e.target);
     ESIA_CHECK(NoErrors(e.dev));
     ESIA_CHECK(Lines(e.dev, "clear pyramid") >= 4 && Lines(e.dev, "dont-care pyramid") == 0);   // the effect reads every level
+}
+
+// Temporal reuse: with RenderParams::targetStatic a capture whose region, pyramid and content are last frame's is not
+// taken again (no copy, no pyramid pass: its levels still hold it) until what lies under it changes; without the
+// promise, or when the content animates by itself, every frame takes it.
+ESIA_TEST(Renderer, UnchangedCapturesAreReused)
+{
+    Setup s;
+    DrawList dl = MakeList();
+    GlassScene(dl, 10);
+    Renderer r(s.dev);
+    RenderParams still;
+    still.targetStatic = true;
+    r.Render(Data({&dl}), nullptr, s.target, still);
+    ESIA_CHECK(NoErrors(s.dev) && r.Stats().backdropCaptures == 1 && r.Stats().reusedCaptures == 0);
+    // the levels a kept capture lives in are loaded by the passes that write them, never DontCare
+    ESIA_CHECK(Lines(s.dev, "dont-care pyramid") == 0);
+    s.dev.ClearLog();
+    r.Render(Data({&dl}), nullptr, s.target, still);
+    ESIA_CHECK(NoErrors(s.dev) && r.Stats().backdropCaptures == 0 && r.Stats().reusedCaptures == 1);
+    ESIA_CHECK(Lines(s.dev, "pyramid") == 0 && r.Stats().passes == 1);
+    // something new under the glass: taken again, then reused again
+    DrawList changed = MakeList();
+    {
+        Painter p(changed);
+        p.Rect(Rect(0, 0, 400, 300), Style().Fill(Paint::Linear(Color::Hex(0x203050), Color::Hex(0x805030))));
+        p.Rect(Rect(100, 100, 140, 140), Style().Fill(Color::Hex(0xFFCC00)));
+        p.Rect(Rect(60, 60, 340, 240), Style().Radius(24).Glass(Glass(10)));
+    }
+    r.Render(Data({&changed}), nullptr, s.target, still);
+    ESIA_CHECK(r.Stats().backdropCaptures == 1 && r.Stats().reusedCaptures == 0);
+    r.Render(Data({&changed}), nullptr, s.target, still);
+    ESIA_CHECK(r.Stats().backdropCaptures == 0 && r.Stats().reusedCaptures == 1);
+    // without the promise (the target's own content may have changed): every frame
+    r.Render(Data({&changed}), nullptr, s.target);
+    ESIA_CHECK(r.Stats().backdropCaptures == 1 && r.Stats().reusedCaptures == 0);
+    // content that animates on the shader's clock under the glass: every frame
+    DrawList shimmer = MakeList();
+    {
+        Painter p(shimmer);
+        p.Rect(Rect(0, 0, 400, 300), Style().Fill(Color::Hex(0x203050)).Shimmer(0.5f, 1.0f));
+        p.Rect(Rect(60, 60, 340, 240), Style().Radius(24).Glass(Glass(10)));
+    }
+    for (int i = 0; i < 2; ++i)
+    {
+        r.Render(Data({&shimmer}), nullptr, s.target, still);
+        ESIA_CHECK(r.Stats().backdropCaptures == 1 && r.Stats().reusedCaptures == 0);
+    }
+    ESIA_CHECK(NoErrors(s.dev));
+}
+
+// Captures share the copy and the pyramid, so the next one writes over a capture's margins - glass on glass, or glass
+// beside glass. A capture whose content stays the same is copied aside, then brought back from that copy (a few
+// copies, no pyramid pass) when something wrote over it: frame 1 takes both, frame 2 takes both again into their
+// copies aside, from frame 3 on both come back from them.
+ESIA_TEST(Renderer, CapturesWrittenOverComeBackFromTheirCopy)
+{
+    Setup s;
+    DrawList dl = MakeList();
+    {
+        Painter p(dl);
+        p.Rect(Rect(0, 0, 400, 300), Style().Fill(Paint::Linear(Color::Hex(0x203050), Color::Hex(0x805030))));
+        p.Rect(Rect(40, 40, 360, 260), Style().Radius(24).Glass(Glass(10)));
+        p.Rect(Rect(80, 80, 200, 140), Style().Fill(Color::Hex(0xFFCC00)));   // content on the card ...
+        p.Rect(Rect(70, 70, 210, 150), Style().Radius(16).Glass(Glass(6)));    // ... under a glass control
+    }
+    Renderer r(s.dev);
+    RenderParams still;
+    still.targetStatic = true;
+    for (int i = 0; i < 2; ++i)
+    {
+        r.Render(Data({&dl}), nullptr, s.target, still);
+        ESIA_CHECK(r.Stats().backdropCaptures == 2 && r.Stats().reusedCaptures == 0);
+    }
+    for (int i = 0; i < 2; ++i)
+    {
+        s.dev.ClearLog();
+        r.Render(Data({&dl}), nullptr, s.target, still);
+        ESIA_CHECK(r.Stats().backdropCaptures == 0 && r.Stats().reusedCaptures == 2 && r.Stats().restoredCaptures == 2);
+        ESIA_CHECK(Lines(s.dev, "pyramid") == 0 && Lines(s.dev, "copy ") >= 2 && Lines(s.dev, "create texture") == 0);
+    }
+    ESIA_CHECK(NoErrors(s.dev));
+}
+
+// backdropReuseFrames: a capture of the same region serves that many frames whatever changed under it (a live
+// background), then it is taken again; a capture that moved is taken at once.
+ESIA_TEST(Renderer, CapturesServeSomeFramesOverALiveBackground)
+{
+    Setup s;
+    Renderer r(s.dev);
+    RenderParams live;
+    live.backdropReuseFrames = 2;
+    int taken = 0, reused = 0;
+    for (int f = 0; f < 6; ++f)
+    {
+        DrawList dl = MakeList();
+        Painter p(dl);
+        p.Rect(Rect(0, 0, 400, 300), Style().Fill(Color((float)f / 6.0f, 0.3f, 0.5f, 1.0f)));   // a new background every frame
+        p.Rect(Rect(60, 60, 340, 240), Style().Radius(24).Glass(Glass(10)));
+        r.Render(Data({&dl}), nullptr, s.target, live);
+        taken += r.Stats().backdropCaptures;
+        reused += r.Stats().reusedCaptures;
+    }
+    ESIA_CHECK(taken == 2 && reused == 4);   // taken, reused twice, taken, reused twice
+    DrawList moved = MakeList();
+    {
+        Painter p(moved);
+        p.Rect(Rect(0, 0, 400, 300), Style().Fill(Color::Hex(0x203050)));
+        p.Rect(Rect(70, 60, 350, 240), Style().Radius(24).Glass(Glass(10)));
+    }
+    r.Render(Data({&moved}), nullptr, s.target, live);
+    ESIA_CHECK(r.Stats().backdropCaptures == 1 && r.Stats().reusedCaptures == 0);
+    ESIA_CHECK(NoErrors(s.dev));
 }
 
 ESIA_TEST(Renderer, RefusedOrFailedVariantsFallBackToTheFullShader)

@@ -128,9 +128,11 @@ Rules at the boundaries:
 5. **Renderer** `Render(DrawData, TextureRegistry*, target, params)`:
    1. `Device::BeginFrame`; pending texture creates / updates / destroys go to the device;
    2. `FramePlan::Build`: merged vertex / index / instance arrays, batches, capture plan (section 5);
-   3. one upload of vertices, indices and FX instances; frame constants;
-   4. the ops run in passes: geometry and text, instanced FX batches, backdrop captures (end the pass, copy or read
-      directly, pyramid passes), glow layers, edge fades, host callbacks;
+   3. one upload of vertices, indices, FX instances and quads; frame constants;
+   4. the ops run in passes: geometry, instanced quads (text, flat tiles), instanced FX batches, backdrop captures
+      (end the pass, copy or read directly, pyramid passes - or, with `RenderParams::targetStatic` /
+      `backdropReuseFrames`, an earlier frame's capture: still in the pyramid, or copied back from where it was kept
+      aside), glow layers, edge fades, host callbacks;
    5. `Device::EndFrame`; GPU times per category arrive a few frames later.
 6. The platform applies the requests (cursor shape, IME candidate window at the caret, whether the game gets the
    mouse / keyboard) and presents.

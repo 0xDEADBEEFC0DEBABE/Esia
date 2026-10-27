@@ -1,11 +1,11 @@
 create texture #1 320x240 RGBA8_SRGB usage=7 host-target
 begin frame 1
-create texture #2 320x240 RGBA8_UNORM usage=9 backdrop-copy
-create texture #3 160x120 RGBA16_FLOAT usage=3 pyramid-1
-create texture #4 80x60 RGBA16_FLOAT usage=3 pyramid-2
-create texture #5 40x30 RGBA16_FLOAT usage=3 pyramid-3
-create texture #6 20x15 RGBA16_FLOAT usage=3 pyramid-4
-create texture #7 10x8 RGBA16_FLOAT usage=3 pyramid-5
+create texture #2 320x240 RGBA8_UNORM usage=d backdrop-copy
+create texture #3 160x120 RGBA16_FLOAT usage=f pyramid-1
+create texture #4 80x60 RGBA16_FLOAT usage=f pyramid-2
+create texture #5 40x30 RGBA16_FLOAT usage=f pyramid-3
+create texture #6 20x15 RGBA16_FLOAT usage=f pyramid-4
+create texture #7 10x8 RGBA16_FLOAT usage=f pyramid-5
 create texture #8 1x1 RGBA8_UNORM usage=1 white
 create buffer #9 vertex 4096 bytes
 create buffer #10 index 4096 bytes

@@ -7,7 +7,8 @@
 //      * geometry with the UI programs, glyphs and flat tiles as instanced quads (the program follows the texture's
 //        coverage format; the quads' rows follow the FX instances in the instance data),
 //      * FX batches as one instanced draw each (4-vertex strips; instance data in a buffer or RGBA32F texture),
-//      * before a glass batch the planner marked: the backdrop capture - end the pass, copy the capture region out
+//      * before a glass batch the planner marked: the backdrop capture (unless last frame's still serves it,
+//        RenderParams::targetStatic) - end the pass, copy the capture region out
 //        of the target (or read the target directly when no glass reads the full-resolution level and the target
 //        can be sampled, or when it cannot be copied: pyramid level 1 then stands in for level 0), build only the
 //        pyramid levels the batch needs (13-tap downsample, taps clamped to the refreshed region), resume the pass;
@@ -44,6 +45,17 @@ namespace esia::render
         // over other content): those pages then draw with their grayscale coverage, as inside glow layers.
         bool subpixelText = true;
         int maxBackdropCaptures = 64;     // per frame; past it, glass reuses the last capture (Stats().overBudget)
+        // Temporal reuse of the backdrop (glass): the renderer keeps the last frame's captures and skips one whose
+        // region, pyramid and the content drawn under it are the same now - its copy and blur are still in the
+        // pyramid (Stats().reusedCaptures). Only when the target's own content under the glass is the same as well: set
+        // this when the host gives the target the same content before every frame (it clears it to one color, or
+        // draws the same background). Content that animates by itself (shimmer, user effects, host callbacks) is never
+        // taken for unchanged.
+        bool targetStatic = false;
+        // ... and with a live background (a game under an overlay): a capture of the same region and pyramid serves for
+        // up to this many frames after it was taken, whatever changed under it - the frost shows a backdrop that many
+        // frames old, for a part of the capture cost (0 = never).
+        int backdropReuseFrames = 0;
         // GPU time per category (Caps::timestampQueries). Every switch between categories costs two timestamps, so
         // after maxProfileScopes of them the rest of the frame counts in totalMs only. Off: the frame total only.
         bool profile = true;
@@ -62,6 +74,8 @@ namespace esia::render
         int fxBatches = 0;
         int backdropCaptures = 0;
         int directCaptures = 0;           // captures whose pyramid was built straight from the target (no copy)
+        int reusedCaptures = 0;           // captures an earlier frame's served (RenderParams::targetStatic, backdropReuseFrames)
+        int restoredCaptures = 0;         // ... of them brought back from the copy kept aside (something wrote over them)
         int glowLayers = 0;
         int vertices = 0;
         int indices = 0;
