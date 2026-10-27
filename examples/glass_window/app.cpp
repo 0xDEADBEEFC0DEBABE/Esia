@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <thread>
 
 namespace glass
@@ -118,6 +119,13 @@ namespace glass
                 app.renderer(renderer);
             platform.SetContext(&ctx);   // input flows from here on
 
+            // "--text-rendering native" (or ESIA_TEXT_RENDERING=native): the window's monitor decides the sub-pixel stripes
+            // and the ClearType level, contrast and gamma, from monitor to monitor (pw::DisplayText)
+            const char* envRendering = std::getenv("ESIA_TEXT_RENDERING");
+            const std::string spec = !opt.textRendering.empty() ? opt.textRendering : std::string(envRendering ? envRendering : "");
+            const bool followMonitor = spec.rfind("native", 0) == 0;
+            std::optional<pw::DisplayText> monitorText;
+
             using Clock = std::chrono::steady_clock;
             const Clock::time_point start = Clock::now();
             Clock::time_point fpsStart = start;
@@ -143,6 +151,20 @@ namespace glass
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     continue;
                 }
+                if (followMonitor && monitorText != fi.text)
+                {
+                    monitorText = fi.text;
+#if defined(GLASS_TEXT)
+                    if (textSystem)
+                    {
+                        esia::text::TextRendering r = textSystem->Rendering();
+                        r.subpixel = fi.text.stripes == pw::DisplayText::Stripes::Rgb   ? esia::text::SubpixelLayout::Rgb
+                                     : fi.text.stripes == pw::DisplayText::Stripes::Bgr ? esia::text::SubpixelLayout::Bgr
+                                                                                        : esia::text::SubpixelLayout::None;
+                        textSystem->SetRendering(r);   // from the text system's next NewFrame
+                    }
+#endif
+                }
                 const double now = std::chrono::duration<double>(Clock::now() - start).count();
                 // fixed steps: frame N (from 1) is at N x dt, as WGT's demo counted (captures at the same moment)
                 ctx.NewFrame(fi.Params(opt.fixedDt > 0.0 ? (frame + 1) * opt.fixedDt : now));
@@ -155,6 +177,12 @@ namespace glass
                 cpuMs = std::chrono::duration<float, std::milli>(Clock::now() - uiStart).count();
                 esia::render::RenderParams rp;
                 rp.frame = host->Frame();
+                if (monitorText)
+                {
+                    rp.text.gamma = monitorText->gamma;
+                    rp.text.clearTypeContrast = monitorText->enhancedContrast;
+                    rp.text.clearTypeLevel = monitorText->clearTypeLevel;
+                }
                 if (!renderer.Render(ctx.GetDrawData(), &ctx.Textures(), host->Target(), rp))
                     std::fprintf(stderr, "%s: the device refused frame %d\n", app.name, frame);
                 platform.ApplyRequests(ctx.Requests());

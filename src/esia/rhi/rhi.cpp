@@ -55,6 +55,8 @@ namespace esia::rhi
         case ShaderProgram::Downsample: return "Downsample";
         case ShaderProgram::LayerComposite: return "LayerComposite";
         case ShaderProgram::Clear: return "Clear";
+        case ShaderProgram::TextLcd: return "TextLcd";
+        case ShaderProgram::TextLcdGray: return "TextLcdGray";
         case ShaderProgram::Count: break;
         }
         return "?";

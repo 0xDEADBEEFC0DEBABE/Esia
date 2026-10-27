@@ -4,7 +4,7 @@ Where the ImGui-free rewrite stands after core round 3 and the UI core's second 
 write a backend is [backends/README.md](backends/README.md).
 
 **Round 3.** By the owner's decision, sub-pixel (LCD / ClearType) text was removed from Esia: text is antialiased
-in grayscale everywhere (section 0). The backends must delete their dual-source code after merging (section 0,
+in grayscale everywhere (section 0). It came back on 2026-10-28, also at the owner's request ("Sub-pixel text"). The backends must delete their dual-source code after merging (section 0,
 "Backend follow-ups"); the grayscale scenes render bit-identical.
 
 **Before that, in one paragraph.** Round 1 built phase 0: the UI core without Dear ImGui, the RHI with a validating null
@@ -41,6 +41,10 @@ screenshots.
 **Data widgets, Android, color glyphs, touch** (2026-10-02): number, vector and color fields, tables, trees, a
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
+
+**Sub-pixel text** (2026-10-28, in Esia): LCD antialiasing again, from either rasterizer with FreeType's filters,
+dual-source blending on every backend but Direct3D 9, the grayscale fallback in glow layers; the ClearType setup of
+the window's monitor on Windows.
 
 **FreeType's rendering** (2026-10-28, in Esia): `TextRendering` chooses how the FreeType text system turns outlines
 into pixels - FreeType's hinting (light, the fonts' own with the v35 or v40 interpreter, the autohinter), its
@@ -97,6 +101,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Sub-pixel text](#sub-pixel-text)
 * [FreeType's rendering](#freetypes-rendering)
 * [Bitmap fonts](#bitmap-fonts)
 * [Text outlines](#text-outlines)
@@ -126,6 +131,49 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Sub-pixel text
+
+The owner asked for LCD (sub-pixel) text with FreeType's rendering, after it had been removed in core round 3
+(section 0). Grayscale stays the default; `TextRendering::subpixel` (RGB / BGR) and `lcdFilter` turn it on.
+
+### What changed
+
+* Text: `RasterizeLcd` (glyph_raster.hpp) covers at three times the horizontal resolution and filters with FreeType's
+  weights (default, light, none); A is the exact grayscale coverage. The FreeType rasterizer renders
+  `FT_RENDER_MODE_LCD` with `FT_Library_SetLcdFilter`, A the stripes' mean. The atlas becomes sub-pixel pages
+  (`GlyphAtlas::Reformat`, RGBA8 + `TextureFlags_LcdCoverage`), which take 8-bit coverage as gray (tiles, outlines,
+  bitmap fonts); hinted loads use `FT_LOAD_TARGET_LCD`. Presets `ClearType()`; `native` on Windows reads the
+  user's font smoothing (ClearType and its stripe order).
+* Renderer and RHI: `ShaderProgram::TextLcd` / `TextLcdGray` (after `Clear`: the other programs keep their
+  numbers), `BlendMode::DualSourceLcd`, `Caps::dualSourceBlend`, `RenderOp::lcd`, `TextComposition::clearTypeContrast`
+  / `clearTypeLevel` (gText.zw), `RenderParams::subpixelText`. `TextLcdPS` composes gray texels as grayscale text
+  and the others per channel; `TextLcdGrayPS` uses A.
+* Backends: the dual-source code of round 3's removals is back - D3D10 / 11 / 12 blend states, GL 3.3 (core) and GLES
+  (`EXT_blend_func_extended`), Vulkan (`dualSrcBlend`, `Desc::dualSrcBlend`), Metal (`Source1` factors, `index(1)`);
+  D3D9 refuses it. `build_shaders.py` patches `SV_Target1` to location 0 index 1 in SPIR-V, adds the GLES extension
+  and leaves `TextLcd` out of SM3.
+* Conformance: the `text_lcd` scene is back with its golden from OpenGL on llvmpipe (all backends here are within
+  8 of it, allowed 48) and its null log, byte for byte the old one; every other null log changes in the frame
+  constants' gText.zw only (0 0 -> 0.5 1).
+* Windows: `win32::MonitorText` / `FrameInfo::text` - DirectWrite's rendering parameters of the window's monitor,
+  the user's font smoothing, and the monitor's orientation (`RotatedStripes`: reversed upside down, none sideways),
+  re-read on monitor, display and setting changes; glass_window follows it under `--text-rendering native`.
+
+### Verified
+
+* Windows, clang-cl with `-Werror`, every backend (Metal's portable part included): ctest 36 / 36. Unit tests of the
+  rasterizer (A = RasterizeGray's coverage, stripes by thirds, the filters keep the ink), the atlas, the text system
+  (both rasterizers, RGB / BGR swap, switching kinds, the golden `ft_lcd`, the fallback = grayscale text), the frame
+  planner, the renderer's program choice, the platform layer.
+* `text_lcd` passes on D3D10, D3D11, D3D12, OpenGL, GLES and Vulkan (RTX 4080 SUPER); glass_window with
+  `--text-rendering cleartype` on Direct3D 11: color-fringed stems on glass, blue at the left edge of light text.
+
+### Not done
+
+* Inside glow layers sub-pixel text stays grayscale (one alpha channel per pixel).
+* Vertical stripes (VRGB / VBGR) and other panels' layouts (OLED) have no sub-pixel mode: they get grayscale.
+* X11, macOS, Android: no per-monitor setup (Linux could read Xft.rgba / RandR's subpixel order).
 
 ## FreeType's rendering
 

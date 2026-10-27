@@ -1,5 +1,14 @@
 // Esia - TextRendering's presets and parser (include/esia/text/text.hpp).
 #include "esia/text/text.hpp"
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace esia::text
 {
@@ -12,6 +21,15 @@ namespace esia::text
         r.hinting = Hinting::Full;
         r.interpreter = TrueTypeInterpreter::V40;
         r.rasterizer = GlyphRasterizer::FreeType;
+        // the user's font smoothing (Control Panel, the ClearType tuner): ClearType in its stripe order, else grayscale
+        BOOL smoothing = FALSE;
+        UINT type = 0, order = FE_FONTSMOOTHINGORIENTATIONRGB;
+        if (SystemParametersInfoW(SPI_GETFONTSMOOTHING, 0, &smoothing, 0) && smoothing &&
+            SystemParametersInfoW(SPI_GETFONTSMOOTHINGTYPE, 0, &type, 0) && type == FE_FONTSMOOTHINGCLEARTYPE)
+        {
+            SystemParametersInfoW(SPI_GETFONTSMOOTHINGORIENTATION, 0, &order, 0);
+            r.subpixel = order == FE_FONTSMOOTHINGORIENTATIONBGR ? SubpixelLayout::Bgr : SubpixelLayout::Rgb;
+        }
 #elif defined(__APPLE__) || defined(__ANDROID__)
         // Core Text and Android draw the design's outlines
 #else
@@ -67,6 +85,8 @@ namespace esia::text
                 r = TextRendering::Light();
             else if (eq == std::string_view::npos && name == "crisp")
                 r = TextRendering::Crisp();
+            else if (eq == std::string_view::npos && name == "cleartype")
+                r = TextRendering::ClearType();
             else if (eq == std::string_view::npos && name == "native")
                 r = NativeTextRendering();
             else if (name == "hinting")
@@ -104,6 +124,28 @@ namespace esia::text
                 ok = Flag(value, r.stemDarkening);
             else if (name == "hinted-advances")
                 ok = Flag(value, r.hintedAdvances);
+            else if (name == "subpixel")
+            {
+                if (value == "none")
+                    r.subpixel = SubpixelLayout::None;
+                else if (value == "rgb")
+                    r.subpixel = SubpixelLayout::Rgb;
+                else if (value == "bgr")
+                    r.subpixel = SubpixelLayout::Bgr;
+                else
+                    ok = false;
+            }
+            else if (name == "lcd-filter")
+            {
+                if (value == "default")
+                    r.lcdFilter = LcdFilter::Default;
+                else if (value == "light")
+                    r.lcdFilter = LcdFilter::Light;
+                else if (value == "none")
+                    r.lcdFilter = LcdFilter::None;
+                else
+                    ok = false;
+            }
             else
                 ok = false;
             if (!ok)

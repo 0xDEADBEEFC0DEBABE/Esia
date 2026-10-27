@@ -365,11 +365,22 @@ scaled size under `PushScale`), `DrawGlyph` (icon fonts). A text system owns its
 program (`TextGray`), so text needs no special commands; the gamma / contrast composition of WGT's grayscale text
 shader (`TextComposition`, DirectWrite's model) applies to every backend.
 
-**No sub-pixel text.** By the owner's decision, Esia antialiases text in grayscale everywhere: there is no LCD /
-ClearType text - no per-stripe RGB coverage or stripe order (RGB / BGR, OLED layouts), no dual-source blending, no
-ClearType level or contrast. It was removed in core round 3 (the RHI's `TextLcd` / `TextLcdGray` programs,
-`BlendMode::DualSourceLcd` and `Caps::dualSourceBlend` with it). What stays is sub-pixel *positioning* - the
-quarter-pixel pen phases of the rasterizer and the atlas - and the grayscale gamma / contrast composition.
+**Sub-pixel text.** Removed in core round 3 by the owner's decision and brought back on 2026-10-28 at the owner's
+request (with FreeType's rendering, `TextRendering::subpixel`): grayscale stays the default. A text system in
+sub-pixel mode rasterizes every glyph per LCD stripe - the analytic rasterizer at three times the horizontal
+resolution (`RasterizeLcd`), FreeType's with `FT_RENDER_MODE_LCD`, both through FreeType's filters (default, light,
+none) - into RGBA8 pages flagged `TextureFlags_LcdCoverage`: R / G / B the stripes' coverage in the panel's order
+(RGB or BGR), A the pixel's grayscale coverage. Shapes and outlines in those pages are gray (R = G = B = A), so flat
+widgets stay in the text's draw call. The renderer draws such pages with `TextLcd` (two outputs: the ink and an RGB
+alpha; `BlendMode::DualSourceLcd`) on the target, gray texels composed like grayscale text (no fringes on colored
+shapes), the rest with the ClearType contrast and level of `TextComposition` (gText.zw); inside glow layers, on targets
+`RenderParams::subpixelText` says are not opaque and on devices without `Caps::dualSourceBlend` (Direct3D 9, GLES
+without `EXT_blend_func_extended`, Vulkan without `dualSrcBlend`) it draws their grayscale coverage (`TextLcdGray`).
+Per-channel alpha cannot be kept in a layer's single alpha channel, so glow layers stay grayscale, as in every
+compositor. On Windows the platform layer reports the ClearType setup of the window's monitor (`FrameInfo::text`,
+DirectWrite's per-monitor parameters - the ClearType tuner): the stripe order, reversed on a monitor turned upside
+down and none on one turned sideways (where DirectWrite keeps horizontal stripes), with its level, contrast and
+gamma; glass_window follows it under `--text-rendering native`.
 
 Implementations:
 

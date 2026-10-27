@@ -85,6 +85,8 @@ namespace esia::shaders
         case rhi::ShaderProgram::Downsample: return {"esia_post.hlsl", "FullscreenVS", "DownsamplePS"};
         case rhi::ShaderProgram::LayerComposite: return {"esia_post.hlsl", "FullscreenVS", "LayerCompositePS"};
         case rhi::ShaderProgram::Clear: return {"esia_post.hlsl", "FullscreenVS", "ClearPS"};
+        case rhi::ShaderProgram::TextLcd: return {"esia_ui.hlsl", "UiVS", "TextLcdPS"};
+        case rhi::ShaderProgram::TextLcdGray: return {"esia_ui.hlsl", "UiVS", "TextLcdGrayPS"};
         case rhi::ShaderProgram::Count: break;
         }
         return {nullptr, nullptr, nullptr};

@@ -307,6 +307,36 @@ ESIA_TEST(Renderer, TextDrawsWithTheGrayscaleProgram)
     ESIA_CHECK(run(true) == 1);
 }
 
+// Sub-pixel pages: the dual-source program on the target; their grayscale coverage without dual-source blending,
+// inside glow layers (alpha targets) and on targets RenderParams says are not opaque.
+ESIA_TEST(Renderer, SubpixelTextPrograms)
+{
+    auto run = [](bool dualSource, bool inLayer, bool opaqueTarget = true) {
+        Caps caps;
+        caps.dualSourceBlend = dualSource;
+        Setup s(caps);
+        TextureRegistry reg;
+        const TextureId page = reg.Create({TextureFormat::RGBA8, 64, 64, TextureFlags_LcdCoverage});
+        DrawList dl = MakeList();
+        Painter p(dl);
+        if (inLayer)
+            p.BeginGlowLayer(Color::White(), 6);
+        dl.AddImage(page, Rect(10, 10, 20, 20), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
+        if (inLayer)
+            p.EndGlowLayer();
+        Renderer r(s.dev);
+        RenderParams params;
+        params.subpixelText = opaqueTarget;
+        r.Render(Data({&dl}), &reg, s.target, params);
+        ESIA_CHECK(NoErrors(s.dev));
+        return std::make_pair(Lines(s.dev, "TextLcd list dual-source"), Lines(s.dev, "TextLcdGray list straight"));
+    };
+    ESIA_CHECK(run(true, false) == std::make_pair(1, 0));
+    ESIA_CHECK(run(false, false) == std::make_pair(0, 1));
+    ESIA_CHECK(run(true, true) == std::make_pair(0, 1));          // alpha layers get the grayscale coverage
+    ESIA_CHECK(run(true, false, false) == std::make_pair(0, 1));   // and so do targets that are not opaque
+}
+
 ESIA_TEST(Renderer, TextureRegistryReachesTheDevice)
 {
     Setup s;

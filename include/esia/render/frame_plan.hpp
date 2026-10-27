@@ -62,7 +62,8 @@ namespace esia::render
         // Draw
         std::uint32_t idxCount = 0, idxOffset = 0;   // into FramePlan::indices
         std::uint32_t geometryFirst = 0, geometryCount = 0;   // direct plans: into FramePlan::geometry
-        bool coverage = false;       // glyph coverage texture: the text pipeline
+        bool coverage = false;       // glyph coverage texture: a text pipeline
+        bool lcd = false;            // ... of sub-pixel coverage (TextureFlags_LcdCoverage): the dual-source one
         // FxBatch
         std::uint32_t instStart = 0, instCount = 0;   // into FramePlan::instances
         std::uint32_t features = 0;  // union of the instances' fx::Feature bits (shader variants, Caps::fxFeatureVariants)

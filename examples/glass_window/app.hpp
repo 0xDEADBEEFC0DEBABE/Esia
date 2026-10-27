@@ -19,9 +19,10 @@
 //                   %LOCALAPPDATA%\Esia\ShaderCache and read back in later runs: esia::rhi::d3d::SetShaderCacheDirectory)
 //   --font          font files, the first the main one, the others fallbacks (default: Segoe UI + Microsoft YaHei);
 //                   for examples that load their own fonts, passed on to them
-//   --text-rendering how glyphs become pixels (esia::text::ParseTextRendering): "crisp", "light", "native",
-//                   "hinting=full,interpreter=35,rasterizer=freetype" ...; over the ESIA_TEXT_RENDERING environment
-//                   variable, which every program honours
+//   --text-rendering how glyphs become pixels (esia::text::ParseTextRendering): "crisp", "light", "cleartype",
+//                   "native", "hinting=full,interpreter=35,rasterizer=freetype" ...; over the ESIA_TEXT_RENDERING
+//                   environment variable, which every program honours. On Windows "native" follows the window's
+//                   monitor: its ClearType stripes (none on a monitor turned sideways), level, contrast and gamma
 //
 // Threads, as a game has them: the main thread creates the window and pumps its messages (window thread); a render
 // thread owns the device, the Context and the frame loop. Input crosses over through Context::QueueInput, so moving

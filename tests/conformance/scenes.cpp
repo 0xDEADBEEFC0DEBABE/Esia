@@ -63,20 +63,33 @@ namespace esia::conformance
 
         float Coverage(int glyph, float x, float y) { return std::clamp(0.5f - GlyphDistance(glyph, x, y), 0.0f, 1.0f); }
 
-        // An Alpha8 page of the eight glyphs.
-        TextureId MakeAtlas(TextureRegistry& reg)
+        // An Alpha8 page of the eight glyphs, or an RGBA8 sub-pixel page (R / G / B coverage a third of a pixel apart,
+        // grayscale in A).
+        TextureId MakeAtlas(TextureRegistry& reg, bool lcd = false)
         {
-            std::vector<std::uint8_t> px((std::size_t)kAtlasW * kAtlasH);
+            std::vector<std::uint8_t> px((std::size_t)kAtlasW * kAtlasH * (lcd ? 4 : 1));
             for (int y = 0; y < kAtlasH; ++y)
                 for (int x = 0; x < kAtlasW; ++x)
                 {
+                    const int g = x / kCell;
                     const float lx = (float)(x % kCell) + 0.5f, ly = (float)y + 0.5f;
-                    px[(std::size_t)y * kAtlasW + (std::size_t)x] = (std::uint8_t)std::lround(Coverage(x / kCell, lx, ly) * 255.0f);
+                    const std::size_t i = (std::size_t)y * kAtlasW + (std::size_t)x;
+                    if (!lcd)
+                    {
+                        px[i] = (std::uint8_t)std::lround(Coverage(g, lx, ly) * 255.0f);
+                        continue;
+                    }
+                    const float r = Coverage(g, lx - 1.0f / 3.0f, ly), gg = Coverage(g, lx, ly), b = Coverage(g, lx + 1.0f / 3.0f, ly);
+                    px[i * 4 + 0] = (std::uint8_t)std::lround(r * 255.0f);
+                    px[i * 4 + 1] = (std::uint8_t)std::lround(gg * 255.0f);
+                    px[i * 4 + 2] = (std::uint8_t)std::lround(b * 255.0f);
+                    px[i * 4 + 3] = (std::uint8_t)std::lround((r + gg + b) / 3.0f * 255.0f);
                 }
             TextureInfo info;
-            info.format = TextureFormat::Alpha8;
+            info.format = lcd ? TextureFormat::RGBA8 : TextureFormat::Alpha8;
             info.width = kAtlasW;
             info.height = kAtlasH;
+            info.flags = lcd ? TextureFlags_LcdCoverage : TextureFlags_None;
             return reg.Create(info, px.data());
         }
 
@@ -296,6 +309,23 @@ namespace esia::conformance
             Glyphs(dl, atlas, Vec2(12.4f, 200.3f), "abc def gha bcd efg", 12, Color::Black(0.6f));
         }
 
+        void TextLcd(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl);
+            const TextureId lcd = MakeAtlas(f.textures, true);
+            p.Rect(Rect(0, 0, 320, 120), Style().Fill(Color::Hex(0x1C1C1E)));
+            p.Rect(Rect(0, 120, 320, 240), Style().Fill(Color::Hex(0xF2F2F7)));
+            Glyphs(dl, lcd, Vec2(12, 10), "abcdefgh", 32, Color::White());
+            Glyphs(dl, lcd, Vec2(12, 60), "hgfe dcba", 16, kOrange);
+            Glyphs(dl, lcd, Vec2(12, 130), "abcdefgh", 32, Color::Black());
+            Glyphs(dl, lcd, Vec2(12, 180), "hgfe dcba", 16, kBlue);
+            // inside a glow layer (an alpha target) sub-pixel pages fall back to their grayscale coverage
+            p.BeginGlowLayer(Color::Hex(0xFF375F, 0.6f), 6.0f);
+            Glyphs(dl, lcd, Vec2(200, 60), "abc", 24, Color::White());
+            p.EndGlowLayer();
+        }
+
         void EdgeFade(SceneFrame& f)
         {
             DrawList& dl = f.NewList();
@@ -484,6 +514,8 @@ namespace esia::conformance
             glow.tolerance.channel = 10;
             glow.tolerance.fraction = 0.01;
             add("text", "text quads from an Alpha8 test atlas (grayscale text program, gamma / contrast composition) on dark and light", &Text);
+            Scene& lcd = add("text_lcd", "sub-pixel text pages (dual-source blending) and their grayscale fallback inside glow layers", &TextLcd);
+            lcd.needsDualSource = true;
             add("edge_fade", "edge fades (per-draw constants) on SDF shapes, text and geometry inside clip rects", &EdgeFade);
             add("clipping", "nested / replacing clip rects (scissors), rounded masks, image fills with uv sub-rects, textured geometry", &Clipping);
             Scene& win = add("windows", "the UI core end to end: background list, overlapping windows (z-order, clip, layout cursor), foreground list", &Windows);

@@ -25,6 +25,7 @@
 #include FT_ADVANCES_H
 #include FT_BITMAP_H
 #include FT_DRIVER_H
+#include FT_LCD_FILTER_H
 #include FT_MODULE_H
 #include FT_OUTLINE_H
 #include FT_TRUETYPE_TABLES_H
@@ -1516,7 +1517,10 @@ namespace esia::text
                     return s;
                 const bool freetype = LoadOutline(face, glyph, (float)q / 16.0f) && rendering_.rasterizer == GlyphRasterizer::FreeType;
                 const float offsetX = 0.25f * (float)phase;
-                if (!(freetype && RenderWithFreeType(*faces_[face], phase, bitmap_)) && !RasterizeGray(outline_, offsetX, bitmap_))
+                const bool rasterized = atlas_.Lcd() ? (freetype && RenderLcdWithFreeType(*faces_[face], phase, bitmap_)) ||
+                                                           RasterizeLcd(outline_, offsetX, rendering_.subpixel == SubpixelLayout::Bgr, LcdWeights(), bitmap_)
+                                                     : (freetype && RenderWithFreeType(*faces_[face], phase, bitmap_)) || RasterizeGray(outline_, offsetX, bitmap_);
+                if (!rasterized)
                     bitmap_ = GlyphBitmap{};   // larger than the rasterizer takes: cached as empty, not retried every frame
                 const GlyphSlot* s = atlas_.Add(key, bitmap_, outline_.Bounds());
                 return s ? s : atlas_.Add(key, GlyphBitmap{}, Rect());   // larger than a page: empty too
@@ -1558,8 +1562,9 @@ namespace esia::text
             }
 
             // ------------------------------------------------------------------ rendering (TextRendering)
-            // FreeType's settings for the rendering: the TrueType interpreter, stem darkening. Faces request their size
-            // again afterwards (a size's prepared hints belong to the interpreter that ran them).
+            // FreeType's settings for the rendering: the TrueType interpreter, stem darkening, the LCD filter; the glyph
+            // pages' kind (grayscale or sub-pixel). Faces request their size again afterwards (a size's prepared hints
+            // belong to the interpreter that ran them).
             void ApplyRendering()
             {
                 FT_UInt interpreter = rendering_.interpreter == TrueTypeInterpreter::V35 ? TT_INTERPRETER_VERSION_35 : TT_INTERPRETER_VERSION_40;
@@ -1569,9 +1574,22 @@ namespace esia::text
                 FT_Property_Set(ft_, "autofitter", "no-stem-darkening", &noDarkening);
                 for (const std::unique_ptr<Face>& f : faces_)
                     f->sizeSet = 0;
-                const bool both = rendering_.hinting == Hinting::Auto ||
+                const bool lcd = rendering_.subpixel != SubpixelLayout::None;
+                // a FreeType without FT_CONFIG_OPTION_SUBPIXEL_RENDERING renders LCD glyphs its own way (Harmony) and
+                // has no filters: the call fails and changes nothing
+                const FT_LcdFilter filters[] = {FT_LCD_FILTER_DEFAULT, FT_LCD_FILTER_LIGHT, FT_LCD_FILTER_NONE};
+                FT_Library_SetLcdFilter(ft_, filters[(int)rendering_.lcdFilter]);
+                atlas_.Reformat(lcd ? TextureFormat::RGBA8 : TextureFormat::Alpha8, lcd ? TextureFlags_LcdCoverage : TextureFlags_None);
+                // hinting across: the classic interpreter, the autohinter (not for LCD targets: it leaves stems alone
+                // across there, so color fringes stay even)
+                const bool both = (rendering_.hinting == Hinting::Auto && !lcd) ||
                                   (rendering_.hinting == Hinting::Full && rendering_.interpreter == TrueTypeInterpreter::V35);
                 wholePixelPens_ = both || HintedAdvances();
+            }
+
+            const std::uint16_t (&LcdWeights() const)[5]
+            {
+                return rendering_.lcdFilter == LcdFilter::Light ? kLcdFilterLight : rendering_.lcdFilter == LcdFilter::None ? kLcdFilterNone : kLcdFilterDefault;
             }
 
             // The advances are the hinted ones (TextRendering::hintedAdvances, with hinting that may change them).
@@ -1582,13 +1600,16 @@ namespace esia::text
 
             FT_Int32 LoadFlags() const
             {
+                // LCD targets: the TrueType interpreter tells fonts they are hinted for ClearType, the autohinter leaves
+                // stems alone across
+                const FT_Int32 target = rendering_.subpixel != SubpixelLayout::None ? FT_LOAD_TARGET_LCD : FT_LOAD_TARGET_NORMAL;
                 FT_Int32 flags = FT_LOAD_NO_BITMAP;
                 switch (rendering_.hinting)
                 {
                 case Hinting::None: flags |= FT_LOAD_NO_HINTING; break;
                 case Hinting::Light: flags |= FT_LOAD_TARGET_LIGHT; break;
-                case Hinting::Full: flags |= FT_LOAD_TARGET_NORMAL; break;
-                case Hinting::Auto: flags |= FT_LOAD_TARGET_NORMAL | FT_LOAD_FORCE_AUTOHINT; break;
+                case Hinting::Full: flags |= target; break;
+                case Hinting::Auto: flags |= target | FT_LOAD_FORCE_AUTOHINT; break;
                 }
                 return flags;
             }
@@ -1646,6 +1667,41 @@ namespace esia::text
                     // rows top first with a positive pitch; from the bottom with a negative one
                     const unsigned char* row = b.pitch >= 0 ? b.buffer + (std::ptrdiff_t)y * b.pitch : b.buffer + (std::ptrdiff_t)(out.height - 1 - y) * -b.pitch;
                     std::memcpy(out.pixels.data() + (std::size_t)y * (std::size_t)out.width, row, (std::size_t)out.width);
+                }
+                return true;
+            }
+
+            // FreeType's sub-pixel rendering of that outline (its LCD filter): the stripes left to right as R G B, or
+            // B G R for `Bgr` panels, and their mean in A for the grayscale fallback. False when it cannot.
+            bool RenderLcdWithFreeType(Face& f, int phase, GlyphBitmap& out)
+            {
+                FT_GlyphSlot slot = f.ft->glyph;
+                if (phase != 0)
+                    FT_Outline_Translate(&slot->outline, 16 * phase, 0);
+                if (FT_Render_Glyph(slot, FT_RENDER_MODE_LCD) != 0 || slot->bitmap.pixel_mode != FT_PIXEL_MODE_LCD)
+                    return false;
+                const FT_Bitmap& b = slot->bitmap;
+                const bool bgr = rendering_.subpixel == SubpixelLayout::Bgr;
+                out = GlyphBitmap{};
+                out.channels = 4;
+                out.lcd = true;
+                out.left = slot->bitmap_left;
+                out.top = -slot->bitmap_top;
+                out.width = (int)b.width / 3;
+                out.height = (int)b.rows;
+                out.pixels.resize((std::size_t)out.width * (std::size_t)out.height * 4);
+                for (int y = 0; y < out.height; ++y)
+                {
+                    const unsigned char* row = b.pitch >= 0 ? b.buffer + (std::ptrdiff_t)y * b.pitch : b.buffer + (std::ptrdiff_t)(out.height - 1 - y) * -b.pitch;
+                    std::uint8_t* dst = out.pixels.data() + (std::size_t)y * (std::size_t)out.width * 4;
+                    for (int x = 0; x < out.width; ++x)
+                    {
+                        const unsigned char* s = row + x * 3;
+                        dst[x * 4 + 0] = s[bgr ? 2 : 0];
+                        dst[x * 4 + 1] = s[1];
+                        dst[x * 4 + 2] = s[bgr ? 0 : 2];
+                        dst[x * 4 + 3] = (std::uint8_t)(((int)s[0] + (int)s[1] + (int)s[2] + 1) / 3);
+                    }
                 }
                 return true;
             }

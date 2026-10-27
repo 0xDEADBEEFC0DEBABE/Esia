@@ -1,8 +1,10 @@
 // TextRendering in the FreeType text system: the parser and presets, hinting (light, the fonts' own with either
 // TrueType interpreter, the autohinter), FreeType's rasterizer beside the analytic one, stem darkening, hinted advances,
-// when a new rendering takes over, ESIA_TEXT_RENDERING - and a golden image of the crisp preset (FreeType's own pixels,
-// so only against the FreeType the golden was made with: the bundled one).
+// sub-pixel (LCD) glyphs from both rasterizers in either stripe order, when a new rendering takes over,
+// ESIA_TEXT_RENDERING - and golden images: the analytic sub-pixel text (everywhere) and the crisp preset (FreeType's
+// own pixels, so only against the FreeType the golden was made with: the bundled one).
 #include "esia/text/freetype.hpp"
+#include "esia/text/glyph_atlas.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -132,6 +134,12 @@ ESIA_TEST(TextRendering, ParsesPresetsAndSettings)
                r.rasterizer == text::GlyphRasterizer::FreeType);
     ESIA_CHECK(text::ParseTextRendering("hinting=auto,rasterizer=analytic", r) && r.hinting == text::Hinting::Auto &&
                r.rasterizer == text::GlyphRasterizer::Analytic);
+    ESIA_CHECK(text::ParseTextRendering("cleartype", r) && r == text::TextRendering::ClearType() && r.subpixel == text::SubpixelLayout::Rgb);
+    ESIA_CHECK(text::ParseTextRendering("subpixel=bgr,lcd-filter=light", r) && r.subpixel == text::SubpixelLayout::Bgr &&
+               r.lcdFilter == text::LcdFilter::Light && r.hinting == text::Hinting::Full);
+    ESIA_CHECK(text::ParseTextRendering("subpixel=none,lcd-filter=none", r) && r.subpixel == text::SubpixelLayout::None &&
+               r.lcdFilter == text::LcdFilter::None);
+    ESIA_CHECK(!text::ParseTextRendering("subpixel=vrgb", r) && !text::ParseTextRendering("lcd-filter=legacy", r));
     // a word it does not know: false, `out` unchanged, the word named
     const text::TextRendering before = r;
     std::string error;
@@ -314,6 +322,98 @@ ESIA_TEST(FreeTypeRendering, TheEnvironmentVariableSetsIt)
     ESIA_CHECK(a->Rendering() == want);
     ESIA_CHECK(b->Rendering() == text::TextRendering::Light());
     ESIA_CHECK(c->Rendering() == text::TextRendering::Light());
+}
+
+// Sub-pixel rendering puts every glyph into sub-pixel pages - with either rasterizer - whose stripes differ at the
+// edges; a B-G-R panel gets the same pages with red and blue swapped.
+ESIA_TEST(FreeTypeRendering, SubpixelGlyphsGoToLcdPages)
+{
+    for (text::GlyphRasterizer raster : {text::GlyphRasterizer::Analytic, text::GlyphRasterizer::FreeType})
+    {
+        text::TextRendering rgb = text::TextRendering::ClearType(), bgr = rgb;
+        rgb.rasterizer = bgr.rasterizer = raster;
+        bgr.subpixel = text::SubpixelLayout::Bgr;
+        Fixture a(rgb), b(bgr);
+        DrawList da = NewList(), db = NewList();
+        a.ts->Draw(da, {a.droid, 13.0f}, Vec2(10.3f, 5.0f), Color::Black(), "Waffle AVg");
+        b.ts->Draw(db, {b.droid, 13.0f}, Vec2(10.3f, 5.0f), Color::Black(), "Waffle AVg");
+        a.pages.Collect(a.textures);
+        b.pages.Collect(b.textures);
+        const std::vector<Quad> qa = Quads(da), qb = Quads(db);
+        ESIA_CHECK(qa.size() >= 8 && qb.size() == qa.size());   // the inked glyphs ("ff" may be one)
+        for (const Quad& q : qa)
+            ESIA_CHECK(a.pages.pages.at(q.texture).info.Lcd() && q.color == Color::Black().ToRgba8());
+        ESIA_CHECK(a.pages.pages.size() == 1 && b.pages.pages.size() == 1);
+        if (a.pages.pages.size() != 1 || b.pages.pages.size() != 1)
+            continue;
+        const std::vector<std::uint8_t>& pa = a.pages.pages.begin()->second.pixels;
+        const std::vector<std::uint8_t>& pb = b.pages.pages.begin()->second.pixels;
+        int fringes = 0, swapped = 0;
+        for (std::size_t i = 0; i + 3 < pa.size() && i + 3 < pb.size(); i += 4)
+        {
+            fringes += pa[i] != pa[i + 2];
+            swapped += pa[i] == pb[i + 2] && pa[i + 1] == pb[i + 1] && pa[i + 2] == pb[i] && pa[i + 3] == pb[i + 3];
+        }
+        ESIA_CHECK(fringes > 100);
+        ESIA_CHECK(swapped == (int)(pa.size() / 4));
+    }
+}
+
+// Switching between grayscale and sub-pixel rendering changes the pages' kind at the next frame; the tiles' generation
+// moves with it (the widget layer adds its coverage tiles again).
+ESIA_TEST(FreeTypeRendering, SwitchingToSubpixelChangesThePages)
+{
+    Fixture f;
+    const std::uint64_t generation = f.ts->TileGeneration();
+    DrawList dl = NewList();
+    f.ts->Draw(dl, {f.droid, 13.0f}, Vec2(10, 5), Color::Black(), "gray");
+    f.pages.Collect(f.textures);
+    ESIA_CHECK(f.pages.pages.size() == 1 && f.pages.pages.begin()->second.info.format == TextureFormat::Alpha8);
+    f.ts->SetRendering(text::TextRendering::ClearType());
+    f.ts->NewFrame({1.0f});
+    ESIA_CHECK(f.ts->TileGeneration() != generation);
+    dl = NewList();
+    f.ts->Draw(dl, {f.droid, 13.0f}, Vec2(10, 5), Color::Black(), "sub-pixel");
+    f.pages.Collect(f.textures);
+    ESIA_CHECK(f.pages.pages.size() == 1 && f.pages.pages.begin()->second.info.Lcd());   // the gray page is gone
+    // a coverage tile goes into the sub-pixel page too, as gray
+    text::GlyphBitmap tile;
+    tile.width = tile.height = 3;
+    tile.pixels.assign(9, 128);
+    const text::GlyphSlot* s = f.ts->AddTile(0x8000000000000001ull, tile);
+    ESIA_CHECK(s && s->page == Quads(dl)[0].texture);
+}
+
+// The analytic sub-pixel text, composed per channel and through its grayscale fallback: the fallback is the grayscale
+// text to the last bit.
+ESIA_TEST(FreeTypeRendering, RendersTheSubpixelGoldenImage)
+{
+    text::TextRendering lcd;
+    lcd.subpixel = text::SubpixelLayout::Rgb;
+    Fixture f(lcd), gray;
+    const text::FontId karla = f.ts->AddFontFile((kFonts + "/Karla-Regular.ttf").c_str());
+    const text::FontId karlaGray = gray.ts->AddFontFile((kFonts + "/Karla-Regular.ttf").c_str());
+    const auto draw = [](Fixture& x, text::FontId k, DrawList& dl) {
+        const Color ink(0.08f, 0.08f, 0.10f, 1.0f);
+        x.ts->Draw(dl, {x.droid, 11.0f}, Vec2(8, 6), ink, "Sub-pixel: three stripes per pixel, FreeType's default filter.");
+        x.ts->Draw(dl, {x.droid, 13.0f}, Vec2(8.25f, 24), ink, "The quick brown fox jumps over the lazy dog 0123456789");
+        x.ts->Draw(dl, {k, 12.0f}, Vec2(8.5f, 44), Color(0.0f, 0.35f, 0.8f, 1.0f), "Karla 12: Waffle Toolkit, liquid glass, AV To");
+        x.ts->Draw(dl, {x.droid, 16.0f}, Vec2(8.75f, 62), ink, "Esia \xC2\xB7 AV To Wa fi \xC3\x80\xC3\x89\xC3\x8E\xC3\xB5\xC3\xBC");
+        x.ts->Draw(dl, {x.droid, 9.0f}, Vec2(8, 86), Color(0.7f, 0.1f, 0.1f, 1.0f), "Nine pixels per em, red ink: the stripes in color.");
+    };
+    DrawList dl = NewList(), dg = NewList();
+    draw(f, karla, dl);
+    draw(gray, karlaGray, dg);
+    f.pages.Collect(f.textures);
+    gray.pages.Collect(gray.textures);
+    CheckGolden(Composite(dl, f.pages, 480, 104), "ft_lcd");
+    const testkit::Image fallback = Composite(dl, f.pages, 480, 104, true), grayscale = Composite(dg, gray.pages, 480, 104);
+    int worst = 0;
+    for (int y = 0; y < 104; ++y)
+        for (int x = 0; x < 480; ++x)
+            for (int c = 0; c < 3; ++c)
+                worst = std::max(worst, std::abs((int)fallback.At(x, y)[c] - (int)grayscale.At(x, y)[c]));
+    ESIA_CHECK(worst <= 2);
 }
 
 ESIA_TEST(FreeTypeRendering, RendersTheCrispGoldenImage)

@@ -403,26 +403,30 @@ ESIA_TEST(FramePlan, EdgeFadesInPixelsAndNeverMixed)
     }
 }
 
-ESIA_TEST(FramePlan, CoveragePagesPickTheTextProgram)
+ESIA_TEST(FramePlan, CoveragePagesPickTextPrograms)
 {
     DrawList dl;
     dl.Reset(Rect(0, 0, 400, 300));
     dl.AddImage(5, Rect(0, 0, 10, 10), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
     dl.AddImage(6, Rect(0, 20, 10, 30), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
-    dl.AddImage(9, Rect(0, 40, 10, 50), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
+    dl.AddImage(7, Rect(0, 40, 10, 50), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
+    dl.AddImage(9, Rect(0, 60, 10, 70), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
     FramePlan plan;
     plan.Build(Data({&dl}), [](TextureId id, TextureInfo& out) {
         if (id == 5)
             out = {TextureFormat::Alpha8, 256, 256};
         else if (id == 6)
+            out = {TextureFormat::RGBA8, 256, 256, TextureFlags_LcdCoverage};
+        else if (id == 7)
             out = {TextureFormat::RGBA8, 256, 256};
         else
             return false;
         return true;
     });
-    ESIA_CHECK(plan.ops.size() == 3);
-    ESIA_CHECK(plan.ops[0].coverage);                            // an Alpha8 glyph page
-    ESIA_CHECK(!plan.ops[1].coverage && !plan.ops[2].coverage);   // an image, an unknown texture
+    ESIA_CHECK(plan.ops.size() == 4);
+    ESIA_CHECK(plan.ops[0].coverage && !plan.ops[0].lcd);                              // an Alpha8 glyph page
+    ESIA_CHECK(plan.ops[1].coverage && plan.ops[1].lcd);                               // a sub-pixel page
+    ESIA_CHECK(!plan.ops[2].coverage && !plan.ops[2].lcd && !plan.ops[3].coverage);   // an image, an unknown texture
 }
 
 ESIA_TEST(FramePlan, CallbacksAndDisplayMapping)

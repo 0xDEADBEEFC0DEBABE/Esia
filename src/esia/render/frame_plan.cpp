@@ -484,7 +484,10 @@ namespace esia::render
                     o.texture = cmd.texture;
                     TextureInfo ti;
                     if (cmd.texture != 0 && textureInfo && textureInfo(cmd.texture, ti))
+                    {
                         o.coverage = ti.Coverage();
+                        o.lcd = ti.Lcd();
+                    }
                     o.idxCount = cmd.count;
                     const PxRect whole = VertexBounds(cmd, map);
                     const bool cut = !clip.Contains(whole);

@@ -161,6 +161,23 @@ namespace esia::text
                 }
             }
 
+            // coverage in [0, 1] per cell (the sub-pixel path filters it before quantizing)
+            void ResolveFloat(std::vector<float>& out) const
+            {
+                out.resize((std::size_t)w_ * h_);
+                for (int y = 0; y < h_; ++y)
+                {
+                    float acc = 0.0f;
+                    const float* row = a_.data() + (std::size_t)y * w_;
+                    float* dst = out.data() + (std::size_t)y * w_;
+                    for (int x = 0; x < w_; ++x)
+                    {
+                        acc += row[x];
+                        dst[x] = std::min(std::fabs(acc), 1.0f);
+                    }
+                }
+            }
+
             void Resolve(std::vector<std::uint8_t>& out) const
             {
                 out.resize((std::size_t)w_ * h_);
@@ -205,10 +222,11 @@ namespace esia::text
             return true;
         }
 
-        // Every edge of every contour, the closing edge included, in bitmap coordinates.
-        void Accumulate(const Outline& outline, float offsetX, const PixelBox& box, Accumulator& acc)
+        // Every edge of every contour, the closing edge included, in bitmap coordinates (x times `xScale`: cells a
+        // third of a pixel wide for sub-pixel coverage).
+        void Accumulate(const Outline& outline, float offsetX, const PixelBox& box, Accumulator& acc, float xScale = 1.0f)
         {
-            const auto map = [&](Vec2 p) { return Vec2(p.x + offsetX - (float)box.left, p.y - (float)box.top); };
+            const auto map = [&](Vec2 p) { return Vec2((p.x + offsetX - (float)box.left) * xScale, p.y - (float)box.top); };
             for (std::size_t c = 0; c < outline.ContourCount(); ++c)
             {
                 const std::span<const Vec2> pts = outline.Contour(c);
@@ -270,6 +288,57 @@ namespace esia::text
         {
             const float grown = Saturate(radius + 0.5f - std::sqrt(d2[i]));
             out.pixels[i] = std::max(coverage[i], (std::uint8_t)(grown * 255.0f + 0.5f));
+        }
+        out.left = box.left;
+        out.top = box.top;
+        out.width = box.width;
+        out.height = box.height;
+        return true;
+    }
+
+    bool RasterizeLcd(const Outline& outline, float offsetX, bool bgr, const std::uint16_t (&filter)[5], GlyphBitmap& out)
+    {
+        out = {};
+        out.channels = 4;
+        out.lcd = true;
+        PixelBox box;
+        if (!InkBox(outline, offsetX, box))
+            return true;
+        box.left -= 1;   // the filter reaches two stripes past the ink: one more empty column on each side
+        box.width += 2;
+        if (box.width > kMaxGlyphPixels || box.height > kMaxGlyphPixels)
+            return false;
+        const int w = box.width, h = box.height, w3 = w * 3;
+        Accumulator acc(w3, h);
+        Accumulate(outline, offsetX, box, acc, 3.0f);
+        std::vector<float> stripes;
+        acc.ResolveFloat(stripes);
+        float k[5];
+        for (int t = 0; t < 5; ++t)
+            k[t] = (float)filter[t] / 256.0f;
+        const auto q = [](float v) { return (std::uint8_t)(std::min(v, 1.0f) * 255.0f + 0.5f); };
+        out.pixels.resize((std::size_t)w * (std::size_t)h * 4);
+        for (int y = 0; y < h; ++y)
+        {
+            const float* row = stripes.data() + (std::size_t)y * (std::size_t)w3;
+            std::uint8_t* dst = out.pixels.data() + (std::size_t)y * (std::size_t)w * 4;
+            for (int x = 0; x < w; ++x)
+            {
+                float v[3];
+                for (int s = 0; s < 3; ++s)
+                {
+                    const int c = x * 3 + s;
+                    float sum = 0.0f;
+                    for (int t = std::max(0, 2 - c); t < 5 && c + t - 2 < w3; ++t)
+                        sum += row[c + t - 2] * k[t];
+                    v[s] = sum;
+                }
+                // the stripes left to right are R G B, or B G R; A: the three stripes' mean, the pixel's own coverage
+                dst[x * 4 + 0] = q(v[bgr ? 2 : 0]);
+                dst[x * 4 + 1] = q(v[1]);
+                dst[x * 4 + 2] = q(v[bgr ? 0 : 2]);
+                dst[x * 4 + 3] = q((row[x * 3] + row[x * 3 + 1] + row[x * 3 + 2]) * (1.0f / 3.0f));
+            }
         }
         out.left = box.left;
         out.top = box.top;

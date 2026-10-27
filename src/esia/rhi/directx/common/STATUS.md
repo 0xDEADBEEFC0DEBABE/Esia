@@ -188,6 +188,14 @@ Verified on the RTX 4080 SUPER: clang-cl 22.1.8 and MSVC 19.44 (`/W4 /WX`) with 
 scenes); D3D12 GPU-based validation clean. Largest differences from the llvmpipe goldens: D3D9 `srgb_msaa` 33 and
 `msaa_target` 25 (under 0.02 % of the pixels), everything else 20 or less.
 
+### Sub-pixel text back (2026-10-28)
+
+The owner asked for sub-pixel text again: the D3D10 / 11 / 12 `DualSourceLcd` blend states (`SRC1_COLOR` /
+`INV_SRC1_COLOR`, `SRC1_ALPHA` / `INV_SRC1_ALPHA`), `Caps::dualSourceBlend` and the TextLcd checks are back
+(round 3's removals reversed); D3D9 has no dual-source blending, refuses `TextLcd` and skips `text_lcd`, drawing
+sub-pixel pages with their grayscale coverage. On the RTX 4080 SUPER: `text_lcd` passes on D3D10, 11 and 12 against
+the old llvmpipe golden (max delta 8), every other scene as before.
+
 ### Core round 3 (grayscale text only)
 
 Sub-pixel text was removed from Esia by the owner's decision (`esia-core` round 3): the D3D10 / 11 / 12 dual-source

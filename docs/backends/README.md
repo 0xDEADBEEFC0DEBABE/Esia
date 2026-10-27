@@ -244,12 +244,17 @@ give them to OpenGL, GLES, Vulkan and Metal, drop that define and regenerate the
 (docs/CI.md, the Shaders workflow).
 
 Blend modes: `Opaque` = replace; `Straight` = rgb `src*srcA + dst*(1-srcA)`, alpha `src + dst*(1-srcA)`;
-`Premultiplied` = rgb and alpha `src + dst*(1-srcA)`. No dual-source blending, no depth, no stencil, no culling.
+`Premultiplied` = rgb and alpha `src + dst*(1-srcA)`; `DualSourceLcd` = rgb `src0*src1 + dst*(1-src1)`, alpha
+`src1.a + dst*(1-src1.a)` (`TextLcd` only, which writes src0.a = 1). No depth, no stencil, no culling.
 Samplers: s0 linear / clamp / no mips, s1 point / clamp / no mips.
 
-**Text is grayscale only.** By the owner's decision, Esia has no sub-pixel (LCD / ClearType) text: every glyph page
-is Alpha8 coverage drawn with `TextGray` (core round 3 removed `TextLcd`, `TextLcdGray`, `BlendMode::DualSourceLcd`
-and `Caps::dualSourceBlend`). A backend has no dual-source blend state, feature or extension to set up.
+**Sub-pixel text.** Grayscale glyph pages are Alpha8 drawn with `TextGray`; sub-pixel pages are RGBA8
+(`TextureFlags_LcdCoverage`) drawn with `TextLcd` and `DualSourceLcd` where `Caps::dualSourceBlend` is set, else with
+`TextLcdGray` and `Straight`. A backend with dual-source blending sets the cap, builds the `DualSourceLcd` blend
+state (its API's `SRC1` factors), enables what its API needs (GLES: `EXT_blend_func_extended`, whose `#extension`
+line the generated `TextLcd` ESSL carries; Vulkan: the `dualSrcBlend` feature) and returns an invalid pipeline for
+`TextLcd` without `DualSourceLcd`, or the other way round. `TextLcdPS` writes `SV_Target0` and `SV_Target1`; the
+generated SPIR-V, GLSL, ESSL and MSL have them as location 0 index 0 / 1 (`color(0)` / `color(0), index(1)`).
 
 ### 4.1 Binding numbers
 
@@ -542,8 +547,7 @@ ctest --preset linux-clang -R esia_conformance                                  
   surface the frame reads but did not write - undefined after `DontCare`, stale from an earlier frame - then shows,
   where a fresh device reads zeros (llvmpipe does). The null backend's goldens are single frames: it ignores it.
 * Scenes a backend cannot run are SKIPped with the reason (the headless device refused the format / samples, no
-  device on this machine); no scene depends on an optional capability any more (`text_lcd` went with sub-pixel
-  text). A missing golden is NO GOLDEN, a failure with
+  device on this machine, `text_lcd` without `Caps::dualSourceBlend`). A missing golden is NO GOLDEN, a failure with
   `--strict`. Exit code: 1 on a failure, 77 when every scene was skipped, else 0. CMake adds, per backend,
   `esia_conformance_<name>` (`--strict`) and `esia_conformance_<name>_frames` (`--frames 3 --strict`; not for null),
   both with `SKIP_RETURN_CODE 77`: a machine without the backend shows them as skipped, never as passed.

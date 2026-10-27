@@ -96,8 +96,9 @@ namespace esia::texttest
     };
 
     // Glyph coverage over white (what the text pipeline does, without its gamma / contrast composition). Quads are
-    // pixel aligned: texels map 1:1.
-    inline testkit::Image Composite(const DrawList& dl, const PageStore& store, int w, int h)
+    // pixel aligned: texels map 1:1. Sub-pixel pages compose per channel (dual-source blending), or with the grayscale
+    // coverage in their A (`lcdAsGray`: the fallback inside layers).
+    inline testkit::Image Composite(const DrawList& dl, const PageStore& store, int w, int h, bool lcdAsGray = false)
     {
         testkit::Image img(w, h);
         std::fill(img.rgba.begin(), img.rgba.end(), (std::uint8_t)255);
@@ -109,13 +110,18 @@ namespace esia::texttest
             const int tx = (int)std::lround(q.uv0.x * (float)page.info.width), ty = (int)std::lround(q.uv0.y * (float)page.info.height);
             const Color col = Color::FromRgba8(q.color);
             const float ink[3] = {col.r * 255.0f, col.g * 255.0f, col.b * 255.0f};
+            const bool lcd = page.info.Lcd();
             for (int y = std::max(y0, 0); y < std::min(y1, h); ++y)
                 for (int x = std::max(x0, 0); x < std::min(x1, w); ++x)
                 {
-                    const float cov = (float)page.pixels[(std::size_t)(ty + y - y0) * page.info.width + (tx + x - x0)] / 255.0f * col.a;
+                    const std::size_t texel = (std::size_t)(ty + y - y0) * page.info.width + (tx + x - x0);
                     std::uint8_t* d = img.At(x, y);
                     for (int c = 0; c < 3; ++c)
+                    {
+                        const std::uint8_t v = lcd ? page.pixels[texel * 4 + (lcdAsGray ? 3 : (std::size_t)c)] : page.pixels[texel];
+                        const float cov = (float)v / 255.0f * col.a;
                         d[c] = (std::uint8_t)std::lround((float)d[c] * (1.0f - cov) + ink[c] * cov);
+                    }
                 }
         }
         return img;

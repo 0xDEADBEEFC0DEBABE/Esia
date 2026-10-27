@@ -6,9 +6,9 @@
 // A TextSystem shapes UTF-8 text, rasterizes glyphs into atlas pages it owns in the TextureRegistry and emits
 // glyph quads into a DrawList (Geometry commands on those pages). Glyph pages are Alpha8 coverage, which the renderer
 // recognizes from the page's TextureInfo and draws with its text pipeline, so text needs no special draw commands.
-// Text is antialiased in grayscale on every platform: there is no sub-pixel (LCD / ClearType) text. How outlines become
-// pixels - hinting, the rasterizer - is a text system's TextRendering (the design's outlines unless asked otherwise).
-// Bitmap fonts draw their own pixels (freetype.hpp).
+// How outlines become pixels - hinting, the rasterizer, grayscale or sub-pixel (LCD) antialiasing - is a text system's
+// TextRendering (the design's outlines in grayscale unless asked otherwise); sub-pixel glyphs go to RGBA8 pages flagged
+// TextureFlags_LcdCoverage, drawn with dual-source blending. Bitmap fonts draw their own pixels (freetype.hpp).
 //
 // Threading: a TextSystem belongs to one UI thread (like the Context that uses it).
 #pragma once
@@ -99,6 +99,27 @@ namespace esia::text
         FreeType,   // FreeType's anti-aliasing rasterizer (the FreeType text system; others draw Analytic)
     };
 
+    // Sub-pixel (LCD) antialiasing: each of an LCD pixel's three color stripes covered on its own, a third of a pixel's
+    // resolution across - ClearType's look. It needs a panel with those stripes, text that is not rotated, and an
+    // opaque target: the renderer draws sub-pixel pages with dual-source blending (Caps::dualSourceBlend) on the target,
+    // and with their grayscale coverage inside glow layers, on targets RenderParams says are not opaque and on devices
+    // without dual-source blending.
+    enum class SubpixelLayout : std::uint8_t
+    {
+        None,   // grayscale antialiasing (OLED and high-density panels, rotated displays)
+        Rgb,    // stripes red, green, blue from the left (most LCD monitors)
+        Bgr,    // blue, green, red
+    };
+
+    // The filter across the stripes of sub-pixel coverage: less color fringing for a little blur (FreeType's filters;
+    // the analytic rasterizer applies the same weights, glyph_raster.hpp).
+    enum class LcdFilter : std::uint8_t
+    {
+        Default,   // FreeType's default five taps (8, 77, 86, 77, 8) / 256
+        Light,     // three taps (85, 86, 85) / 256: sharper, a little more fringing
+        None,      // each stripe its own coverage: the sharpest, strong fringes
+    };
+
     struct TextRendering
     {
         Hinting hinting = Hinting::None;
@@ -109,6 +130,8 @@ namespace esia::text
         // as GDI-era text did. A text's width then depends on the density (Measure gives the width at the density of
         // the last NewFrame), and the pen stays on whole pixels.
         bool hintedAdvances = false;
+        SubpixelLayout subpixel = SubpixelLayout::None;   // sub-pixel (LCD) antialiasing, for panels of that layout
+        LcdFilter lcdFilter = LcdFilter::Default;
 
         bool operator==(const TextRendering&) const = default;
 
@@ -132,20 +155,31 @@ namespace esia::text
             r.hintedAdvances = true;
             return r;
         }
+        // ClearType as DirectWrite draws it: the fonts' own hints run vertically (v40), FreeType's rasterizer, sub-pixel
+        // antialiasing for red-green-blue stripes with FreeType's default filter, the design's widths.
+        static constexpr TextRendering ClearType()
+        {
+            TextRendering r;
+            r.hinting = Hinting::Full;
+            r.rasterizer = GlyphRasterizer::FreeType;
+            r.subpixel = SubpixelLayout::Rgb;
+            return r;
+        }
     };
 
     // What the platform's own text looks like: Windows - the fonts' hints with FreeType's default interpreter and
-    // rasterizer; Linux - light hinting, FreeType's rasterizer and stem darkening (the desktops' defaults); Apple and
-    // Android - the design's outlines.
+    // rasterizer, sub-pixel antialiasing where the user's font smoothing is ClearType (its stripe order); Linux - light
+    // hinting, FreeType's rasterizer and stem darkening (the desktops' defaults); Apple and Android - the design's
+    // outlines in grayscale.
     ESIA_API TextRendering NativeTextRendering();
 
     // A rendering from text, for command lines and environment variables: comma-separated presets and settings, later
     // ones overriding earlier ones -
-    //   design | light | crisp | native
+    //   design | light | crisp | cleartype | native
     //   hinting=none|light|full|auto   interpreter=35|40   rasterizer=analytic|freetype
-    //   stem-darkening[=0|1]   hinted-advances[=0|1]
-    // e.g. "crisp", "native,stem-darkening=0", "hinting=full,interpreter=35". False (and `out` unchanged) on a word it
-    // does not know, which `error` then names.
+    //   stem-darkening[=0|1]   hinted-advances[=0|1]   subpixel=none|rgb|bgr   lcd-filter=default|light|none
+    // e.g. "crisp", "native,stem-darkening=0", "hinting=full,interpreter=35", "cleartype,subpixel=bgr". False (and `out`
+    // unchanged) on a word it does not know, which `error` then names.
     ESIA_API bool ParseTextRendering(std::string_view spec, TextRendering& out, std::string* error = nullptr);
 
     // How glyphs are rasterized this frame.

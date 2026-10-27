@@ -101,6 +101,7 @@ namespace esia::render
         int W = 0, H = 0;
         FrameConstants frameMain{}, frameLayer{};
         int layerDepth = 0;
+        bool subpixelText = true;       // RenderParams::subpixelText
         bool layerPending = false;      // the open layer has not been cleared yet (its pass did not start)
         PxRect layerRegion;             // ... and the region to clear then
         fx::LayerParams activeLayer{};
@@ -422,7 +423,8 @@ namespace esia::render
             }
             fc.text[0] = p.text.gamma;
             fc.text[1] = p.text.grayscaleContrast;
-            fc.text[2] = fc.text[3] = 0.0f;
+            fc.text[2] = p.text.clearTypeContrast;
+            fc.text[3] = p.text.clearTypeLevel;
             fc.conv[0] = caps.framebufferOriginBottomLeft ? 1.0f : 0.0f;
             fc.conv[1] = caps.halfPixelOffset ? 0.5f : 0.0f;
             fc.conv[2] = caps.fxStorage == rhi::FxStorage::Texture ? (float)fxPerRow : 0.0f;
@@ -518,8 +520,7 @@ namespace esia::render
             }
             rhi::PipelineDesc d;
             d.program = program;
-            const bool ui = program == rhi::ShaderProgram::UiGeometry || program == rhi::ShaderProgram::TextGray;
-            d.layout = ui ? rhi::VertexLayout::UiVertex : rhi::VertexLayout::None;
+            d.layout = rhi::UsesUiVertices(program) ? rhi::VertexLayout::UiVertex : rhi::VertexLayout::None;
             d.topology = program == rhi::ShaderProgram::Fx ? rhi::Topology::TriangleStrip : rhi::Topology::TriangleList;
             d.blend = blend;
             d.targetFormat = passFormat;
@@ -771,9 +772,20 @@ namespace esia::render
         void DrawGeometry(const RenderOp& op)
         {
             ProfileRun(RunGeometry);
-            const rhi::ShaderProgram program = op.coverage ? rhi::ShaderProgram::TextGray : rhi::ShaderProgram::UiGeometry;
             EnsureContentPass();
-            if (!BindPipeline(GetPipeline(program, rhi::BlendMode::Straight)) || !SetScissor(op.clip))
+            rhi::Pipeline pipeline;
+            if (op.lcd)
+            {
+                // sub-pixel pages: per-channel alpha on an opaque target; inside glow layers (alpha targets), on targets
+                // that are not opaque and without dual-source blending, the grayscale coverage kept in A
+                if (caps.dualSourceBlend && subpixelText && !(layerDepth > 0 && layer))
+                    pipeline = GetPipeline(rhi::ShaderProgram::TextLcd, rhi::BlendMode::DualSourceLcd);
+                if (!pipeline)
+                    pipeline = GetPipeline(rhi::ShaderProgram::TextLcdGray, rhi::BlendMode::Straight);
+            }
+            else
+                pipeline = GetPipeline(op.coverage ? rhi::ShaderProgram::TextGray : rhi::ShaderProgram::UiGeometry, rhi::BlendMode::Straight);
+            if (!BindPipeline(pipeline) || !SetScissor(op.clip))
                 return;
             EnsureFrame();
             BindTexture(rhi::kSlotTexture, TextureOf(op.texture));
@@ -962,6 +974,7 @@ namespace esia::render
             if (!dev.BeginFrame(params.frame))
                 return false;
             target = t;
+            subpixelText = params.subpixelText;
 
             ApplyTextureChanges(registry);
             plan.Build(dd, [this](TextureId id, TextureInfo& out) {

@@ -127,14 +127,21 @@ namespace esia::rhi
     enum class ShaderProgram : std::uint8_t
     {
         UiGeometry,       // UiVS + UiPS: images, lines, charts
-        TextGray,         // UiVS + TextGrayPS: Alpha8 glyph coverage (all text: Esia has no sub-pixel text)
+        TextGray,         // UiVS + TextGrayPS: Alpha8 glyph coverage
         Fx,               // FxVS + FxPS: SDF shapes, instanced quads (4 vertices, triangle strip)
         Downsample,       // FullscreenVS + DownsamplePS: one pyramid level (3 vertices)
         LayerComposite,   // FullscreenVS + LayerCompositePS: glow layer onto the target
         Clear,            // FullscreenVS + ClearPS: clears the scissor rect to transparent black
+        TextLcd,          // UiVS + TextLcdPS: sub-pixel (LCD) glyph coverage, per-channel alpha (BlendMode::DualSourceLcd)
+        TextLcdGray,      // UiVS + TextLcdGrayPS: sub-pixel pages with their grayscale coverage (layers, no dual-source)
         Count
     };
     ESIA_API const char* ShaderProgramName(ShaderProgram p);
+    // The programs that draw indexed UI vertices (VertexLayout::UiVertex): geometry and text.
+    constexpr bool UsesUiVertices(ShaderProgram p)
+    {
+        return p == ShaderProgram::UiGeometry || p == ShaderProgram::TextGray || p == ShaderProgram::TextLcd || p == ShaderProgram::TextLcdGray;
+    }
 
     enum class VertexLayout : std::uint8_t
     {
@@ -149,6 +156,9 @@ namespace esia::rhi
         Opaque,          // src
         Straight,        // rgb: src * srcA + dst * (1 - srcA); a: src + dst * (1 - srcA)
         Premultiplied,   // rgb: src + dst * (1 - srcA);        a: src + dst * (1 - srcA)
+        // rgb: src0 * src1 + dst * (1 - src1); a: src1.a + dst * (1 - src1.a) - a second color output (SV_Target1) as
+        // per-channel alpha (Caps::dualSourceBlend; TextLcd only, and TextLcd only with it)
+        DualSourceLcd,
     };
 
     struct PipelineDesc
@@ -256,6 +266,9 @@ namespace esia::rhi
         // 0.5 (WgtPixelPos then returns pixel centers); the backend's SM3 shader prelude moves clip-space positions
         // by half a pixel of the current target through ESIA_CLIP_POSITION (docs/backends/README.md, "Direct3D 9").
         bool halfPixelOffset = false;
+        // Dual-source blending (BlendMode::DualSourceLcd): sub-pixel text. Without it sub-pixel glyph pages draw with
+        // the grayscale coverage kept in their alpha (TextLcdGray).
+        bool dualSourceBlend = true;
         // RGBA16F render targets (with blending) for the backdrop pyramid and glow layers (else RGBA8: some banding)
         bool floatRenderTargets = true;
         // Render targets the backend reports with TextureUsage_Sampled can be sampled right after their pass

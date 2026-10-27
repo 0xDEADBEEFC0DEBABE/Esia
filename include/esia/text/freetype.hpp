@@ -11,7 +11,8 @@
 //     fallback fonts never change the line height - WGT's DirectWrite layout does the same;
 //   * glyphs from the outlines at the exact physical size - the design's (the default), or hinted there by FreeType
 //     (TextRendering: light, the fonts' own hints with either TrueType interpreter, the autohinter) - through the
-//     shared analytic rasterizer (glyph_raster.hpp) or FreeType's; 4 horizontal sub-pixel phases (whole pixels when
+//     shared analytic rasterizer (glyph_raster.hpp) or FreeType's, in grayscale or per LCD stripe (sub-pixel pages:
+//     TextureFlags_LcdCoverage, shapes and outlines in them as gray); 4 horizontal sub-pixel phases (whole pixels when
 //     the hinting fits vertical stems too - the classic interpreter, the autohinter - or the advances are hinted),
 //     baselines on whole pixels.
 //

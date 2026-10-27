@@ -25,17 +25,23 @@
 
 namespace esia::render
 {
-    // How glyph coverage becomes alpha (the DirectWrite model for grayscale text; see TextGrayPS in esia_ui.hlsl).
+    // How glyph coverage becomes alpha (the DirectWrite model; see TextGrayPS / TextLcdPS in esia_ui.hlsl).
     struct TextComposition
     {
         float gamma = 1.8f;               // display gamma of the alpha correction (1.0 .. 2.2)
-        float grayscaleContrast = 0.5f;   // enhanced contrast (stem weight)
+        float grayscaleContrast = 0.5f;   // enhanced contrast (stem weight) of grayscale text, shapes and outlines
+        float clearTypeContrast = 0.5f;   // ... of sub-pixel (LCD) text
+        float clearTypeLevel = 1.0f;      // 0 = sub-pixel pages drawn with their grayscale coverage, 1 = full sub-pixel
     };
 
     struct RenderParams
     {
         rhi::FrameDesc frame;             // the backend's recording context and the host's frame number, if it needs them
         TextComposition text;
+        // Sub-pixel (LCD) glyph pages draw with per-channel alpha (dual-source blending), which is right on an opaque
+        // target. Off for a target that is composited later through its alpha (a transparent window, a texture drawn
+        // over other content): those pages then draw with their grayscale coverage, as inside glow layers.
+        bool subpixelText = true;
         int maxBackdropCaptures = 64;     // per frame; past it, glass reuses the last capture (Stats().overBudget)
         // GPU time per category (Caps::timestampQueries). Every switch between categories costs two timestamps, so
         // after maxProfileScopes of them the rest of the frame counts in totalMs only. Off: the frame total only.

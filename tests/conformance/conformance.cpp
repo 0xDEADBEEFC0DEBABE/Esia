@@ -293,6 +293,11 @@ namespace
             detail = error.empty() ? "no headless device" : error;
             return Result::Skip;
         }
+        if (scene.needsDualSource && !h.device->GetCaps().dualSourceBlend)
+        {
+            detail = "no dual-source blending";
+            return Result::Skip;
+        }
         adapter = h.adapter;
         const Result r = RenderAndCheck(o, backend, scene, h, detail);
         // counted after the readback: reading back is checked too
