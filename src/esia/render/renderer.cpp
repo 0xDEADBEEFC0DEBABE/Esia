@@ -81,8 +81,8 @@ namespace esia::render
         std::uint64_t frame = 0;
 
         rhi::Texture white;
-        rhi::Buffer vb, ib, fxBuf;
-        std::size_t vbCap = 0, ibCap = 0, fxCap = 0;
+        rhi::Buffer vb, ib, fxBuf, quadBuf;   // quadBuf: the quads as attributes (Caps::quadAttributes)
+        std::size_t vbCap = 0, ibCap = 0, fxCap = 0, quadCap = 0;
         rhi::Texture fxTex;
         int fxTexW = 0, fxTexH = 0, fxPerRow = 1;
         float quadStart = 0.0f;   // where the quads start in the instance data (gConv.w): a row of the buffer or texture
@@ -143,7 +143,7 @@ namespace esia::render
         rhi::Format passFormat = rhi::Format::Unknown;
         int passSamples = 1;
         const FrameConstants* passFrame = nullptr;
-        bool inPass = false, frameSet = false, geometryBound = false, fxDataBound = false;
+        bool inPass = false, frameSet = false, geometryBound = false, quadsBound = false, fxDataBound = false;
         rhi::Pipeline boundPipeline;
         rhi::Texture boundTex[rhi::kTextureSlots];
         rhi::IRect boundScissor;
@@ -183,7 +183,7 @@ namespace esia::render
             textures.clear();
             Release(white);
             Release(fxTex);
-            for (rhi::Buffer* b : {&vb, &ib, &fxBuf})
+            for (rhi::Buffer* b : {&vb, &ib, &fxBuf, &quadBuf})
                 if (*b)
                 {
                     dev.DestroyBuffer(*b);
@@ -380,8 +380,21 @@ namespace esia::render
                         dev.UpdateBuffer(ib, plan.indices.data(), ibytes);
                 }
             }
-            const std::size_t n = (std::size_t)plan.fxCount, nq = (std::size_t)plan.quadCount;
+            const std::size_t n = (std::size_t)plan.fxCount;
             quadStart = 0.0f;
+            if (caps.quadAttributes && plan.quadCount > 0)
+            {
+                // the quads as instance-rate attributes (Caps::quadAttributes): a vertex buffer of their own
+                const std::size_t bytes = (std::size_t)plan.quadCount * sizeof(QuadInstance);
+                if (!EnsureBuffer(quadBuf, quadCap, bytes, rhi::BufferKind::QuadInstances, "quads"))
+                    return false;
+                auto* dst = static_cast<unsigned char*>(dev.MapBuffer(quadBuf, bytes));
+                if (!dst)
+                    return false;
+                WriteQuads(dst);
+                dev.UnmapBuffer(quadBuf);
+            }
+            const std::size_t nq = caps.quadAttributes ? 0u : (std::size_t)plan.quadCount;   // quads in the instance data
             if (n == 0 && nq == 0)
                 return true;
             const bool texture = caps.fxStorage == rhi::FxStorage::Texture;
@@ -399,7 +412,8 @@ namespace esia::render
                 if (!dst)
                     return false;
                 WriteInstances(reinterpret_cast<float*>(dst));
-                WriteQuads(dst + fxBytes);
+                if (nq > 0)
+                    WriteQuads(dst + fxBytes);
                 dev.UnmapBuffer(fxBuf);
                 quadStart = (float)(n * fx::kInstanceVec4Count);
                 return true;
@@ -415,7 +429,7 @@ namespace esia::render
             WriteInstances(staging.data());
             std::size_t q = 0;
             for (const FramePlan::QuadRun& r : plan.quadRuns)
-                for (std::uint32_t i = 0; i < r.count; ++i, ++q)
+                for (std::uint32_t i = 0; nq > 0 && i < r.count; ++i, ++q)
                     std::memcpy(staging.data() + (fxRows + q / quadsPerRow) * rowFloats + (q % quadsPerRow) * 8, &r.first[i], sizeof(QuadInstance));
             quadStart = (float)fxRows;
             if (!fxTex || fxTexW != w || fxTexH < h)
@@ -513,7 +527,7 @@ namespace esia::render
 
         void ForgetBindings()
         {
-            frameSet = geometryBound = fxDataBound = scissorSet = drawSet = false;
+            frameSet = geometryBound = quadsBound = fxDataBound = scissorSet = drawSet = false;
             boundPipeline = {};
             for (rhi::Texture& t : boundTex)
                 t = {};
@@ -573,7 +587,9 @@ namespace esia::render
             }
             rhi::PipelineDesc d;
             d.program = program;
-            d.layout = rhi::UsesUiVertices(program) ? rhi::VertexLayout::UiVertex : rhi::VertexLayout::None;
+            d.layout = rhi::UsesUiVertices(program)                      ? rhi::VertexLayout::UiVertex
+                       : rhi::DrawsQuads(program) && caps.quadAttributes ? rhi::VertexLayout::QuadInstance
+                                                                          : rhi::VertexLayout::None;
             d.topology = rhi::DrawsInstances(program) ? rhi::Topology::TriangleStrip : rhi::Topology::TriangleList;
             d.blend = blend;
             d.targetFormat = passFormat;
@@ -1015,6 +1031,20 @@ namespace esia::render
                 return;
             EnsureFrame();
             BindTexture(rhi::kSlotTexture, TextureOf(op.texture));
+            if (q && caps.quadAttributes)
+            {
+                // the quads' own buffer at the attributes, from the run's first quad on
+                if (!quadsBound)
+                {
+                    dev.SetVertexBuffer(quadBuf);
+                    quadsBound = true;
+                    geometryBound = false;
+                }
+                BindDraw(op.fade, 0);
+                dev.DrawInstancedFrom(4, op.quadCount, op.quadStart);
+                ++stats.drawCalls;
+                return;
+            }
             if (q)
             {
                 BindInstanceData();
@@ -1032,6 +1062,7 @@ namespace esia::render
                 dev.SetVertexBuffer(vb);
                 dev.SetIndexBuffer(ib);
                 geometryBound = true;
+                quadsBound = false;
             }
             if (plan.direct)
             {
