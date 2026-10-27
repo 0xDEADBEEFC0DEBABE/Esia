@@ -401,7 +401,21 @@ Implementations:
   (v35, FreeType's rasterizer, hinted advances: the classic sharp Windows look), `NativeTextRendering()` (DirectWrite's
   v40 look on Windows, fontconfig's hintslight with stem darkening on Linux, the design on Apple and Android). Hinted
   glyphs keep the quarter-pixel phases unless the pens are whole pixels. The FreeType build turns on
-  `FT_CONFIG_OPTION_SUBPIXEL_RENDERING` and adds the `autofit` and `smooth` modules. FreeType 2.14.3 and HarfBuzz 14.5.0 are built from pinned sources where the system has
+  `FT_CONFIG_OPTION_SUBPIXEL_RENDERING` and adds the `autofit` and `smooth` modules.
+  Distance-field text (`DrawShapes`): every glyph's MTSDF (`include/esia/text/distance_field.hpp`, Esia's own
+  generator: the outline with its curves, resolved to the area it fills - overlapping contours as variable fonts keep
+  them lose their inner edges, crossings become corners -, edges colored per run, pseudo-distances per channel, the
+  true distance in A, signs from the non-zero winding, clashes flattened) is made once at 48 field pixels per em
+  (ranges 8 and 24) on RGBA8 pages flagged `TextureFlags_DistanceField`, and serves every size. Each glyph becomes an
+  FX instance of `fx::ShapeKind::Glyph` (feature `fx::kGlyph`; its field in `shape2`, the text's box in `rect`, so
+  paints, glass and shimmer span the text) made from the caller's material: `Painter::Text` / `TextBox` with a
+  `Style` give text every FX layer - fill and gradients, stroke (an outline, align 1 outside), drop and inner
+  shadows, outer and inner glows, glass, shimmer - and `Style::Weight` grows or thins the glyphs (a weight animated
+  without bitmaps). The outer layers of all glyphs (drop shadow, outer glow, a stroke outside) go before all faces.
+  `TextRendering::distanceFieldFrom` draws text of that many pixels per em and more from the fields by itself. The
+  shader takes the median of R, G, B near the edge and the true distance farther out; past the field's reach (a
+  quarter em) a lower bound from the glyph's ink box keeps glows fading (larger halos: glow layers). A blurred text
+  is a shadow without a fill; a blurred backdrop is glass without refraction. FreeType 2.14.3 and HarfBuzz 14.5.0 are built from pinned sources where the system has
   neither (`ESIA_TEXT_DEPS=auto|bundled|system`, `cmake/EsiaTextDeps.cmake`), so the same text system runs on
   Windows too. Right-to-left words in left-to-right text are laid out right to left, and the white space and
   punctuation around them stay where they were typed (a small part of UAX #9: neutrals between two right-to-left

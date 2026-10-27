@@ -93,7 +93,8 @@ add_library(esia_text STATIC
     text/glyph_atlas.cpp
     text/font_file.cpp
     text/system_fonts.cpp
-    text/text_rendering.cpp)
+    text/text_rendering.cpp
+    text/distance_field.cpp)
 target_link_libraries(esia_text PUBLIC esia_core)
 esia_target_defaults(esia_text)
 add_library(esia::text ALIAS esia_text)

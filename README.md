@@ -43,7 +43,7 @@ EsiaGUI is this repository with the widget layer added: it shares Esia's history
 | --- | --- |
 | UI core (`src/esia/core`) | ([UI_CORE.md](docs/UI_CORE.md)) ids, input (touch included), windows with per-window DPI, front-to-back hit testing, press and key ownership, containers and layout providers, child scroll regions, popups and tooltips, per-id state, draw lists, texture registry, debug checks for mistakes in UI code |
 | Renderer (`src/esia/render`) | the Painter (rectangles, capsules, circles, lines, polylines, arcs, rings, sectors and areas as signed-distance shapes, shadows, inner and outer glow, images, icons, text, masks, scales, glow layers, edge fades), the frame planner, liquid glass (backdrop captures, blur pyramid, refraction, dispersion), glow layers, edge fades, custom HLSL effects on Direct3D, GPU profiling |
-| Text (`src/esia/text`) | analytic glyph rasterizer, glyph atlas, FreeType + HarfBuzz text system (bundled or the system's) with FreeType's rendering to choose from (hinting: light, the fonts' own with the v35 or v40 interpreter, the autohinter; its rasterizer, stem darkening, whole-pixel advances), sub-pixel (LCD) antialiasing from either rasterizer (dual-source blending on every backend but Direct3D 9, following the window's monitor on Windows), system font lookup with fallback chains for every major script, color emoji from bitmap strikes (sbix, CBDT) and COLR fonts (gradients, transforms, composite modes), text outlines (glyphs grown by exact distance), bitmap fonts (BDF, PCF, Windows FNT / FON, pixel for pixel) |
+| Text (`src/esia/text`) | analytic glyph rasterizer, glyph atlas, FreeType + HarfBuzz text system (bundled or the system's) with FreeType's rendering to choose from (hinting: light, the fonts' own with the v35 or v40 interpreter, the autohinter; its rasterizer, stem darkening, whole-pixel advances), sub-pixel (LCD) antialiasing from either rasterizer (dual-source blending on every backend but Direct3D 9, following the window's monitor on Windows), multi-channel distance fields (MTSDF, made by Esia: overlapping contours resolved, sharp corners at any scale) for large and transformed text and for text with any Painter material - outlines, glows, shadows, gradients, glass, weight - in one draw, system font lookup with fallback chains for every major script, color emoji from bitmap strikes (sbix, CBDT) and COLR fonts (gradients, transforms, composite modes), text outlines (glyphs grown by exact distance), bitmap fonts (BDF, PCF, Windows FNT / FON, pixel for pixel) |
 | Backends (`src/esia/rhi/<name>`) | DirectX (Direct3D 9 / 10 / 11 / 12, in `rhi/directx`), OpenGL 3.3 / OpenGL ES 3.0, Vulkan 1.1+, Metal; and `rhi/null`, a device without a GPU that records the command stream and checks the call rules |
 | Platform | layers as libraries for Win32 (`src/esia/platform/win32`, [PLATFORM_WIN32.md](docs/PLATFORM_WIN32.md)), X11 (`src/esia/platform/x11`) and Android (`src/esia/platform/android`); the example's own frames on AppKit (macOS) and UIKit (iOS) |
 | Example | `glass_window`: the whole path (platform input, core, renderer, RHI, swap chain) in a window, on every system |
@@ -144,7 +144,7 @@ glass_window --api vulkan --vsync off      # another backend, uncapped frame rat
 | `--frames N`, `--screenshot out.png`, `--fixed-dt s` | quit after N frames, write the last one (alone: after 60 frames), advance the UI clock by `s` per frame (deterministic captures) |
 | `--debug` | the API's validation layer; the message count is printed at exit |
 | `--font file` | font files instead of the system's (the first is the main one, the others its fallbacks) |
-| `--text-rendering spec` | how glyphs become pixels: `crisp` (the fonts' hints, the classic interpreter, whole pixels), `light`, `cleartype` (sub-pixel), `native` (the platform's look; on Windows the ClearType setup of the window's monitor, from monitor to monitor), `design` (the default), or settings: `hinting=none\|light\|full\|auto`, `interpreter=35\|40`, `rasterizer=analytic\|freetype`, `stem-darkening`, `hinted-advances`, `subpixel=none\|rgb\|bgr`, `lcd-filter=default\|light\|none` |
+| `--text-rendering spec` | how glyphs become pixels: `crisp` (the fonts' hints, the classic interpreter, whole pixels), `light`, `cleartype` (sub-pixel), `native` (the platform's look; on Windows the ClearType setup of the window's monitor, from monitor to monitor), `design` (the default), or settings: `hinting=none\|light\|full\|auto`, `interpreter=35\|40`, `rasterizer=analytic\|freetype`, `stem-darkening`, `hinted-advances`, `subpixel=none\|rgb\|bgr`, `lcd-filter=default\|light\|none`, `distance-field=N` (text of N pixels per em and more from distance fields) |
 
 ## Windows
 
@@ -351,10 +351,9 @@ the commit for `main` and delete the branch.
 
 ## Roadmap
 
-1. Text: multi-channel distance fields (MTSDF) for large and transformed text and for text effects (outline, glow,
-   shadow, weight animation in one draw); hinted text at rest that turns unhinted while it moves; legibility that
-   adapts to the background; then the bidi algorithm, variable-font instances (SF's weights), fallback per language
-   and fallback fonts loaded when first needed.
+1. Text: hinted text at rest that turns unhinted while it moves; legibility that adapts to the background; glyph
+   instancing; then the bidi algorithm, variable-font instances (SF's weights), fallback per language and fallback
+   fonts loaded when first needed.
 2. Platform layers: Cocoa and UIKit as libraries (the example's AppKit and UIKit frames are the start), then Wayland,
    SDL, and inline IME composition on Linux and Android.
 3. Performance: fewer render-pass breaks per backdrop capture on tile-based GPUs; FX feature variants on Vulkan and

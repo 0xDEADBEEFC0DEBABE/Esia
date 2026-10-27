@@ -103,6 +103,8 @@ namespace esia
         EffectId effect = 0;
         float custom[4] = {0, 0, 0, 0};
 
+        float weight = 0.0f;                // text with this style (Painter::Text): UI units every glyph grows by
+
         Style& Fill(Color c) { hasFill = true; fill = Paint::Solid(c); return *this; }
         Style& Fill(const Paint& p) { hasFill = true; fill = p; return *this; }
         Style& Radius(float r) { radii[0] = radii[1] = radii[2] = radii[3] = r; return *this; }
@@ -122,6 +124,9 @@ namespace esia
         Style& Shimmer(float intensity, float speed = 0.55f) { shimmer = intensity; shimmerSpeed = speed; return *this; }
         Style& Noise(float n) { noise = n; return *this; }
         Style& Effect(EffectId id, float p0 = 0, float p1 = 0, float p2 = 0, float p3 = 0) { effect = id; custom[0] = p0; custom[1] = p1; custom[2] = p2; custom[3] = p3; return *this; }
+        // Text drawn with this style: every glyph grown (> 0) or thinned (< 0) by `units` UI units - a weight for any
+        // font, animated without a bitmap per step.
+        Style& Weight(float units) { weight = units; return *this; }
     };
 
     enum PolylineFlags_ : std::uint32_t
@@ -200,6 +205,13 @@ namespace esia
         Vec2 Text(Vec2 pos, text::FontRef font, Color color, std::string_view text, float wrapWidth = 0.0f, std::uint32_t flags = 0);
         // Text laid out inside `r`: align (0,0) = top-left, (0.5,0.5) = centered ... TextFlags_Ellipsis trims to the width.
         Vec2 TextBox(const esia::Rect& r, Vec2 align, text::FontRef font, Color color, std::string_view text, std::uint32_t flags = 0);
+        // Text with a material: every glyph a distance-field shape (sharp at any size and scale) with the style's fill
+        // (colors, gradients), stroke (an outline; align 1 = outside, the usual one for text), shadow, glows, inner
+        // shadow, glass, shimmer, opacity and weight - its radii and image do not apply. The drop shadows, outer glows
+        // and outside strokes of all glyphs go under all their faces. A text system without distance fields draws the
+        // fill's first color. TextOutline (SetTextOutline) does not apply: the style's stroke is the outline.
+        Vec2 Text(Vec2 pos, text::FontRef font, const Style& s, std::string_view text, float wrapWidth = 0.0f, std::uint32_t flags = 0);
+        Vec2 TextBox(const esia::Rect& r, Vec2 align, text::FontRef font, const Style& s, std::string_view text, std::uint32_t flags = 0);
         Vec2 MeasureText(text::FontRef font, std::string_view text, float wrapWidth = 0.0f) const;
         // One glyph of an icon font optically centered on `center`, `font.size` = em size.
         void Icon(Vec2 center, text::FontRef font, char32_t icon, Color color);
@@ -255,6 +267,9 @@ namespace esia
         // circles without a copy of the style)
         void EmitShape(fx::ShapeKind kind, const esia::Rect& bounds, const Style& s, const float* extra, float radius = -1.0f,
                        float smoothing = -1.0f);
+        // The material rows of `inst` from `s` (paint, stroke, shadow, glow, glass, noise, shimmer, opacity, custom
+        // effect, mask); its features. flatGlass: flat drawing's glass surface `flatFill` instead of the fill.
+        std::uint32_t Material(const Style& s, bool flatGlass, Color flatFill, fx::Instance& inst) const;
         // Flat drawing: the shape as geometry when it can be, filled with `fill` (true: drawn, or nothing to draw).
         bool FlatGeometry(const esia::Rect& bounds, const Style& s, Color fill, const float* radii, float smoothing);
         // its core: colors with their opacity applied

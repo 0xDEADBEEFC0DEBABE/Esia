@@ -98,15 +98,15 @@ namespace esia::text
         slot.width = bitmap.width;
         slot.height = bitmap.height;
         slot.ink = ink;
-        const bool lcd = Lcd();
-        slot.color = desc_.format == TextureFormat::RGBA8 && !lcd;
+        const bool lcd = Lcd(), sdf = DistanceField();
+        slot.color = desc_.format == TextureFormat::RGBA8 && !lcd && !sdf;
         if (bitmap.width > 0 && bitmap.height > 0)
         {
             const std::size_t bpp = (std::size_t)BytesPerPixel(desc_.format);
             // what each page takes: its own kind, and sub-pixel pages 8-bit coverage too (as gray)
             const bool gray = lcd && bitmap.channels == 1;
             const std::size_t in = gray ? 1 : bpp;
-            if (bitmap.lcd != (lcd && !gray) || (std::size_t)bitmap.channels != in ||
+            if (bitmap.lcd != (lcd && !gray) || bitmap.sdf != sdf || (std::size_t)bitmap.channels != in ||
                 bitmap.pixels.size() < (std::size_t)bitmap.width * bitmap.height * in)
                 return nullptr;   // a coverage bitmap for a color atlas, a sub-pixel one for a grayscale atlas ...
             const int cw = bitmap.width + desc_.padding, ch = bitmap.height + desc_.padding;

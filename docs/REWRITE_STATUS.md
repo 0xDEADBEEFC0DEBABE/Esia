@@ -42,6 +42,10 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**Distance-field text** (2026-10-28, in Esia): Esia's own MTSDF generator (overlapping contours resolved, sharp
+corners), glyphs as FX shapes with every Painter material (`Painter::Text` with a `Style`: outlines, glows,
+shadows, gradients, glass, weight) on every backend, large text from fields by itself.
+
 **Sub-pixel text** (2026-10-28, in Esia): LCD antialiasing again, from either rasterizer with FreeType's filters,
 dual-source blending on every backend but Direct3D 9, the grayscale fallback in glow layers; the ClearType setup of
 the window's monitor on Windows.
@@ -101,6 +105,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Distance-field text](#distance-field-text)
 * [Sub-pixel text](#sub-pixel-text)
 * [FreeType's rendering](#freetypes-rendering)
 * [Bitmap fonts](#bitmap-fonts)
@@ -131,6 +136,48 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Distance-field text
+
+The owner asked for native glows, outlines, shadows, glass and blur on text, all optimized, and for MSDF. Text can
+now be drawn from multi-channel signed distance fields made by Esia, as FX shapes with any Painter material.
+
+### What changed
+
+* `GenerateMtsdf` (`include/esia/text/distance_field.hpp`, `GlyphShape`): curves flattened to 1/32 px, the filled
+  area resolved (pieces of edges cut where contours cross, those inside the area dropped, the rest linked into loops
+  with the inside on the left), loops cut at corners (turns over about 8 degrees, exact tangents at the curves' ends)
+  and colored per run (Chlumsky's switching, a teardrop for one corner), per texel the pseudo-distance to the nearest
+  run per channel (from a grid of the pieces within reach) and the true distance in A (nearest points handed on from
+  texel to texel past the multi-channel reach), signs from the non-zero winding, clashes flattened to the median.
+* The FreeType text system: `DrawShapes` (fields at 48 pixels per em, ranges 8 / 24, on a field atlas; one per glyph
+  for every size), the two passes, color and bitmap glyphs as their bitmaps; `TextRendering::distanceFieldFrom`
+  (parser: `distance-field=N`).
+* FX: `ShapeKind::Glyph`, feature `kGlyph` (variants of other batches leave the glyph code out), `SdGlyph`: the median
+  near the edge, the true distance farther, the ink box's signed distance as a lower bound past the reach. The quad
+  and the planner's bounds come from `shape2`. Direct3D 9: the full ps_3_0 shader has no registers left for it
+  (`Caps::fullFxGlyphs` = false), so glyph batches build their variant at once.
+* Painter: `Material()` out of `EmitShape` (shapes unchanged), `Text` / `TextBox` with a `Style`, `Style::Weight`.
+  glass_window's text wrappers pass `DrawShapes` and `DrawOutline` on (outlines did not reach the inner system).
+
+### Verified
+
+* Generator tests: the square's distances (median and A to 0.1 px), corners held to a twentieth of a pixel, either
+  winding, holes, overlapping squares filled as their union (A exact to the union's outline), a cubic circle, a
+  triangle, an L and a drop sampled at 6 x on the right side everywhere but 0.1 px of the outline.
+* The text system (two passes, the text's box, one field per glyph for every size, large text from fields), the
+  Painter (the material handed on, flat drawing), the renderer (glyph variants where the full shader lacks them).
+* The conformance scene `text_fields` (made with the generator, no font): D3D9, D3D10, D3D11, D3D12, OpenGL, GLES and
+  Vulkan within 2 levels of the D3D11 golden (D3D9 through its variant); ctest 36 / 36.
+* glass_window with a title in white with a blue outline, a pink glow and a shadow (Latin and Chinese), a gradient
+  across a word and glass text, on Direct3D 11.
+
+### Not done
+
+* Fields are made when first drawn, on the UI thread (3 ms per glyph in a debug build): no background generation or
+  cache on disk yet.
+* Glows and shadows reach a quarter em from the field; farther they follow the glyph's box (use a glow layer).
+* Per-glyph shadows of neighbouring glyphs add up where they overlap (no union of the whole text's shadow).
 
 ## Sub-pixel text
 

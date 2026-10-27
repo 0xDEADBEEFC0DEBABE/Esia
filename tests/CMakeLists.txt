@@ -18,6 +18,7 @@ target_link_libraries(esia_core_tests PRIVATE esia::core)
 esia_add_test(esia_text_tests
     text/test_glyph_raster.cpp
     text/test_glyph_atlas.cpp
+    text/test_distance_field.cpp
     text/test_system_fonts.cpp)
 target_link_libraries(esia_text_tests PRIVATE esia::text)
 target_compile_definitions(esia_text_tests PRIVATE
@@ -70,7 +71,7 @@ endif()
 # are a library of their own: backend tests that render them with their API's checks link it too.
 add_library(esia_conformance_scenes STATIC conformance/scenes.cpp)
 target_include_directories(esia_conformance_scenes PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/conformance)
-target_link_libraries(esia_conformance_scenes PUBLIC esia::render esia_testkit)
+target_link_libraries(esia_conformance_scenes PUBLIC esia::render esia_testkit PRIVATE esia::text)   # text: the glyph fields
 esia_target_defaults(esia_conformance_scenes)
 add_executable(esia_conformance conformance/conformance.cpp)
 target_link_libraries(esia_conformance PRIVATE esia_conformance_scenes esia::backends)

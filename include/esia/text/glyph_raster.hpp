@@ -44,6 +44,7 @@ namespace esia::text
         std::vector<std::uint8_t> pixels;   // rows top first, tightly packed: 8-bit coverage, or RGBA8 (channels 4)
         int channels = 1;            // 1: coverage; 4: a color glyph, straight-alpha RGBA8 (emoji), or sub-pixel coverage
         bool lcd = false;            // channels 4: R, G, B the coverage of those stripes, A the grayscale coverage
+        bool sdf = false;            // channels 4: a multi-channel signed distance field (distance_field.hpp)
     };
 
     // FreeType's LCD filters: 5 weights out of 256 across the stripes (they sum to 256).

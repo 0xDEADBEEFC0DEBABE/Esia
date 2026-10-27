@@ -31,7 +31,8 @@ namespace esia::text
         int maxPages = 4;   // before the atlas starts over
         int padding = 1;    // empty texels right of and below every glyph
         TextureFormat format = TextureFormat::Alpha8;   // RGBA8: color glyphs (GlyphBitmap::channels 4)
-        std::uint32_t flags = TextureFlags_None;        // TextureFlags_LcdCoverage (with RGBA8): sub-pixel pages
+        std::uint32_t flags = TextureFlags_None;        // with RGBA8: TextureFlags_LcdCoverage (sub-pixel pages) or
+                                                        // TextureFlags_DistanceField (MTSDF pages)
     };
 
     class ESIA_API GlyphAtlas
@@ -49,6 +50,7 @@ namespace esia::text
         // Pages of another kind from now on (grayscale <-> sub-pixel): the pages and every glyph go at once.
         void Reformat(TextureFormat format, std::uint32_t flags);
         bool Lcd() const { return desc_.format == TextureFormat::RGBA8 && (desc_.flags & TextureFlags_LcdCoverage) != 0; }
+        bool DistanceField() const { return desc_.format == TextureFormat::RGBA8 && (desc_.flags & TextureFlags_DistanceField) != 0; }
 
         const GlyphSlot* Find(std::uint64_t key) const;
         // Packs `bitmap` into a page and caches it under `key`. Null when it cannot fit into an empty page (a glyph

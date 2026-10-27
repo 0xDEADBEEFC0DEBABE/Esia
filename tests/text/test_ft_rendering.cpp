@@ -6,6 +6,8 @@
 #include "esia/text/freetype.hpp"
 #include "esia/text/glyph_atlas.hpp"
 #include <algorithm>
+#include <chrono>
+#include <cstring>
 #include <cmath>
 #include <cstdlib>
 #include <string>
@@ -414,6 +416,76 @@ ESIA_TEST(FreeTypeRendering, RendersTheSubpixelGoldenImage)
             for (int c = 0; c < 3; ++c)
                 worst = std::max(worst, std::abs((int)fallback.At(x, y)[c] - (int)grayscale.At(x, y)[c]));
     ESIA_CHECK(worst <= 2);
+}
+
+// Distance-field text: every glyph an FX glyph shape on a distance-field page, made once for every size - the outer
+// layers of all glyphs first, then the faces; the text's box spans the paints; color glyphs as their bitmaps.
+ESIA_TEST(FreeTypeRendering, DrawShapesMakesGlyphShapes)
+{
+    Fixture f;
+    fx::Instance m;
+    std::memset(&m, 0, sizeof(m));
+    m.fill0[0] = m.fill0[1] = m.fill0[2] = m.fill0[3] = 1.0f;
+    m.misc[0] = 1.0f;
+    m.stroke[3] = 1.0f;
+    m.strokeParams[0] = 2.0f;
+    m.strokeParams[1] = 1.0f;   // outside: an outer layer
+    m.flags[0] = fx::kFill | fx::kStroke;
+    DrawList dl = NewList();
+    const auto start = std::chrono::steady_clock::now();
+    const Vec2 size = f.ts->DrawShapes(dl, {f.droid, 40.0f}, Vec2(10, 20), m, 0, 0.5f, "Waffle AVg");
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    ESIA_CHECK(size == f.ts->Measure({f.droid, 40.0f}, "Waffle AVg").size);
+    const std::vector<fx::Instance>& in = dl.FxInstances();
+    ESIA_CHECK(in.size() >= 16 && in.size() % 2 == 0);   // 8 or 9 inked glyphs ("ff" may be one), twice
+    const std::size_t n = in.size() / 2;
+    f.pages.Collect(f.textures);
+    for (std::size_t i = 0; i < in.size(); ++i)
+    {
+        const fx::Instance& g = in[i];
+        ESIA_CHECK(g.flags[2] == (std::uint32_t)fx::ShapeKind::Glyph && (g.flags[0] & fx::kGlyph));
+        // the outer layer first (the stroke outside), then the face
+        ESIA_CHECK(i < n ? g.flags[0] == (fx::kStroke | fx::kGlyph) : g.flags[0] == (fx::kFill | fx::kGlyph));
+        ESIA_CHECK(g.rect[0] == 10.0f && g.rect[1] == 20.0f && g.rect[2] == 10.0f + size.x && g.rect[3] == 20.0f + size.y);
+        ESIA_CHECK(g.shape2[2] > g.shape2[0] && g.shape2[3] > g.shape2[1] && g.uvRect[2] > g.uvRect[0]);
+        ESIA_CHECK(g.radii[0] == 8.0f && g.radii[1] == 24.0f && std::fabs(g.shape[2] * 40.0f - 48.0f) < 1e-3f && g.shape[3] == 0.5f);
+    }
+    // the same glyph, the same field: both passes and every size share it
+    ESIA_CHECK(in[0].uvRect[0] == in[n].uvRect[0] && in[0].uvRect[1] == in[n].uvRect[1]);
+    std::uint32_t cmds = 0;
+    for (const DrawCmd& c : dl.Commands())
+        if (c.kind == DrawCmdKind::Fx)
+        {
+            ++cmds;
+            ESIA_CHECK(f.pages.pages.count(c.texture) && f.pages.pages.at(c.texture).info.format == TextureFormat::RGBA8 &&
+                       (f.pages.pages.at(c.texture).info.flags & TextureFlags_DistanceField) && !f.pages.pages.at(c.texture).info.Coverage());
+        }
+    ESIA_CHECK(cmds >= 1);
+    DrawList again = NewList();
+    f.ts->DrawShapes(again, {f.droid, 400.0f}, Vec2(0, 0), m, 0, 0.0f, "Waffle AVg");
+    f.pages.Collect(f.textures);
+    ESIA_CHECK(again.FxInstances().size() == in.size() && again.FxInstances()[0].uvRect[0] == in[0].uvRect[0]);
+    std::printf("  %zu distance fields in %.2f ms (%.3f ms each)\n", n, ms, ms / (double)n);
+}
+
+// Large text draws from the fields by itself (TextRendering::distanceFieldFrom); smaller text stays coverage quads.
+ESIA_TEST(FreeTypeRendering, LargeTextDrawsFromFields)
+{
+    text::TextRendering r;
+    r.distanceFieldFrom = 32.0f;
+    Fixture f(r);
+    DrawList small = NewList(), large = NewList();
+    f.ts->Draw(small, {f.droid, 24.0f}, Vec2(0, 0), Color::White(), "Esia");
+    f.ts->Draw(large, {f.droid, 32.0f}, Vec2(0, 0), Color(1, 0.5f, 0.25f, 0.5f), "Esia");
+    ESIA_CHECK(small.FxInstances().empty() && !Quads(small).empty());
+    ESIA_CHECK(large.FxInstances().size() == 4 && Quads(large).empty());
+    const fx::Instance& g = large.FxInstances()[0];
+    ESIA_CHECK(g.flags[0] == (fx::kFill | fx::kGlyph) && g.fill0[0] == 1.0f && g.fill0[1] == 0.5f && g.fill0[3] == 0.5f && g.misc[0] == 1.0f);
+    // the density counts: 24 UI units at 1.5 pixels per unit are 36 pixels
+    f.ts->NewFrame({1.5f});
+    DrawList dense = NewList();
+    f.ts->Draw(dense, {f.droid, 24.0f}, Vec2(0, 0), Color::White(), "Esia");
+    ESIA_CHECK(dense.FxInstances().size() == 4);
 }
 
 ESIA_TEST(FreeTypeRendering, RendersTheCrispGoldenImage)

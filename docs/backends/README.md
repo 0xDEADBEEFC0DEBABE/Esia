@@ -547,7 +547,9 @@ ctest --preset linux-clang -R esia_conformance                                  
   surface the frame reads but did not write - undefined after `DontCare`, stale from an earlier frame - then shows,
   where a fresh device reads zeros (llvmpipe does). The null backend's goldens are single frames: it ignores it.
 * Scenes a backend cannot run are SKIPped with the reason (the headless device refused the format / samples, no
-  device on this machine, `text_lcd` without `Caps::dualSourceBlend`). A missing golden is NO GOLDEN, a failure with
+  device on this machine, `text_lcd` without `Caps::dualSourceBlend`). `text_fields` draws glyph shapes (FX
+  `ShapeKind::Glyph`, feature `kGlyph`: a distance field sampled from `gTex`); a backend whose full FX shader cannot
+  hold them sets `Caps::fullFxGlyphs = false` and builds the variants glyph batches ask for (Direct3D 9). A missing golden is NO GOLDEN, a failure with
   `--strict`. Exit code: 1 on a failure, 77 when every scene was skipped, else 0. CMake adds, per backend,
   `esia_conformance_<name>` (`--strict`) and `esia_conformance_<name>_frames` (`--frames 3 --strict`; not for null),
   both with `SKIP_RETURN_CODE 77`: a machine without the backend shows them as skipped, never as passed.

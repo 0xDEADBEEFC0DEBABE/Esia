@@ -26,6 +26,9 @@ namespace esia
         // (texels with R = G = B are grayscale: shapes, outlines). Drawn with the dual-source text pipeline, or its
         // grayscale fallback where per-channel alpha cannot be kept (layers, devices without dual-source blending).
         TextureFlags_LcdCoverage = 1u << 0,
+        // An RGBA8 page of glyph distance fields (MTSDF: R, G, B multi-channel, A true distance): drawn by FX glyph
+        // instances, never as coverage.
+        TextureFlags_DistanceField = 1u << 1,
     };
 
     struct TextureInfo

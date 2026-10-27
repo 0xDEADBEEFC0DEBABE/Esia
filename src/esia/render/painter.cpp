@@ -289,7 +289,6 @@ namespace esia
             if (kind == fx::ShapeKind::RoundRect && solidPaint && !(extra && mergeSmooth_ >= 0.0f) && FlatGeometry(bounds, s, flatFill, radii, smoothing))
                 return;
         }
-        const float scale = env_.metricsScale;
 
         fx::Instance inst;
         std::memset(&inst, 0, sizeof(inst));
@@ -318,6 +317,61 @@ namespace esia
             }
         }
 
+        feat |= Material(s, flatGlass, flatFill, inst);
+        if ((feat & (fx::kFill | fx::kStroke | fx::kShadow | fx::kGlow | fx::kInnerGlow | fx::kGlass | fx::kCustom)) == 0)
+            return;
+        if (inst.misc[0] <= 0.0f)
+            return;
+
+        inst.flags[0] = feat;
+        inst.flags[2] = (std::uint32_t)kind;
+        // layouts reserve glow room from the resting geometry: press / pop scale animations must not re-flow
+        esia::Rect restShape(inst.rect[0], inst.rect[1], inst.rect[2], inst.rect[3]);
+        if (feat & fx::kMerge)
+            restShape = restShape.Union(esia::Rect(inst.shape2[0], inst.shape2[1], inst.shape2[2], inst.shape2[3]));
+        const float restGlow = inst.glowParams[0];
+        ApplyScale(inst);
+
+        // glows stay off neighbouring items: layouts reserve room for them, and whatever still reaches a
+        // neighbour fades out before its edge (halo bounds from the layout layer)
+        if ((feat & fx::kGlow) && s.containGlow && env_.glow)
+        {
+            esia::Rect shape(inst.rect[0], inst.rect[1], inst.rect[2], inst.rect[3]);
+            if (feat & fx::kMerge)
+                shape = shape.Union(esia::Rect(inst.shape2[0], inst.shape2[1], inst.shape2[2], inst.shape2[3]));
+            env_.glow->ReportGlowReach(*dl_, restShape, restGlow * 0.75f);
+            esia::Rect bound;
+            float fade = 0.0f;
+            if (env_.glow->GlowBounds(*dl_, shape, inst.glowParams[0] * 1.8f, bound, fade))
+            {
+                feat |= fx::kHalo;
+                inst.flags[0] = feat;
+                SetRect(inst.halo, bound);
+                inst.maskParams[2] = fade;
+            }
+        }
+
+        // coarse CPU culling against the current clip rect
+        float pad = 2.0f;
+        if (feat & fx::kShadow)
+            pad = std::max(pad, inst.shadowParams[0] * 1.6f + std::max(inst.shadowParams[1], 0.0f) + std::max(std::fabs(inst.shadowParams[2]), std::fabs(inst.shadowParams[3])));
+        if (feat & fx::kGlow)
+            pad = std::max(pad, inst.glowParams[0] * 1.8f);
+        esia::Rect ext(inst.rect[0] - pad, inst.rect[1] - pad, inst.rect[2] + pad, inst.rect[3] + pad);
+        if (feat & fx::kMerge)
+            ext = ext.Union(esia::Rect(inst.shape2[0] - pad, inst.shape2[1] - pad, inst.shape2[2] + pad, inst.shape2[3] + pad));
+        const esia::Rect& clip = dl_->ClipRect();
+        if (ext.max.x < clip.min.x || ext.max.y < clip.min.y || ext.min.x > clip.max.x || ext.min.y > clip.max.y)
+            return;
+
+        Emit(inst, s.effect, s.image);
+    }
+
+    std::uint32_t Painter::Material(const Style& s, bool flatGlass, Color flatFill, fx::Instance& inst) const
+    {
+        const bool flat = env_.flat;
+        const float scale = env_.metricsScale;
+        std::uint32_t feat = 0;
         // paint
         if (flatGlass)
         {
@@ -425,54 +479,7 @@ namespace esia
             SetRect(inst.mask, masks_[maskDepth_ - 1]);
             Set4(inst.maskParams, maskRadius_[maskDepth_ - 1], env_.cornerSmoothing, 0, 0);
         }
-
-        if ((feat & (fx::kFill | fx::kStroke | fx::kShadow | fx::kGlow | fx::kInnerGlow | fx::kGlass | fx::kCustom)) == 0)
-            return;
-        if (inst.misc[0] <= 0.0f)
-            return;
-
-        inst.flags[0] = feat;
-        inst.flags[2] = (std::uint32_t)kind;
-        // layouts reserve glow room from the resting geometry: press / pop scale animations must not re-flow
-        esia::Rect restShape(inst.rect[0], inst.rect[1], inst.rect[2], inst.rect[3]);
-        if (feat & fx::kMerge)
-            restShape = restShape.Union(esia::Rect(inst.shape2[0], inst.shape2[1], inst.shape2[2], inst.shape2[3]));
-        const float restGlow = inst.glowParams[0];
-        ApplyScale(inst);
-
-        // glows stay off neighbouring items: layouts reserve room for them, and whatever still reaches a
-        // neighbour fades out before its edge (halo bounds from the layout layer)
-        if ((feat & fx::kGlow) && s.containGlow && env_.glow)
-        {
-            esia::Rect shape(inst.rect[0], inst.rect[1], inst.rect[2], inst.rect[3]);
-            if (feat & fx::kMerge)
-                shape = shape.Union(esia::Rect(inst.shape2[0], inst.shape2[1], inst.shape2[2], inst.shape2[3]));
-            env_.glow->ReportGlowReach(*dl_, restShape, restGlow * 0.75f);
-            esia::Rect bound;
-            float fade = 0.0f;
-            if (env_.glow->GlowBounds(*dl_, shape, inst.glowParams[0] * 1.8f, bound, fade))
-            {
-                feat |= fx::kHalo;
-                inst.flags[0] = feat;
-                SetRect(inst.halo, bound);
-                inst.maskParams[2] = fade;
-            }
-        }
-
-        // coarse CPU culling against the current clip rect
-        float pad = 2.0f;
-        if (feat & fx::kShadow)
-            pad = std::max(pad, inst.shadowParams[0] * 1.6f + std::max(inst.shadowParams[1], 0.0f) + std::max(std::fabs(inst.shadowParams[2]), std::fabs(inst.shadowParams[3])));
-        if (feat & fx::kGlow)
-            pad = std::max(pad, inst.glowParams[0] * 1.8f);
-        esia::Rect ext(inst.rect[0] - pad, inst.rect[1] - pad, inst.rect[2] + pad, inst.rect[3] + pad);
-        if (feat & fx::kMerge)
-            ext = ext.Union(esia::Rect(inst.shape2[0] - pad, inst.shape2[1] - pad, inst.shape2[2] + pad, inst.shape2[3] + pad));
-        const esia::Rect& clip = dl_->ClipRect();
-        if (ext.max.x < clip.min.x || ext.max.y < clip.min.y || ext.min.x > clip.max.x || ext.min.y > clip.max.y)
-            return;
-
-        Emit(inst, s.effect, s.image);
+        return feat;
     }
 
     bool Painter::FlatGeometry(const esia::Rect& bounds, const Style& s, Color fill, const float* shapeRadii, float smoothing)
@@ -824,6 +831,59 @@ namespace esia
         if (outlined)
             env_.text->DrawOutline(*dl_, font, pos, outline, text, wrapWidth, flags, 1.0f);
         return env_.text->Draw(*dl_, font, pos, color, text, wrapWidth, flags, 1.0f);
+    }
+
+    Vec2 Painter::Text(Vec2 pos, text::FontRef font, const Style& s, std::string_view text, float wrapWidth, std::uint32_t flags)
+    {
+        if (!env_.text)
+            return Vec2(0, 0);
+        // flat drawing: glass becomes its surface under the fill, as for shapes
+        bool flatGlass = false;
+        Color flatFill = s.hasFill ? s.fill.a : Color::Clear();
+        if (env_.flat && s.hasGlass && (!s.hasFill || s.fill.kind == fx::PaintKind::Solid))
+        {
+            const Color tint = s.glass.tint, c = flatFill;
+            const Color base = Lerp(env_.flatSurface, tint.WithAlpha(env_.flatSurface.a), tint.a);
+            flatFill = Color(c.r * c.a + base.r * (1.0f - c.a), c.g * c.a + base.g * (1.0f - c.a), c.b * c.a + base.b * (1.0f - c.a),
+                             c.a + base.a * (1.0f - c.a));
+            flatGlass = true;
+        }
+        fx::Instance m;
+        std::memset(&m, 0, sizeof(m));
+        Style plain = s;
+        plain.image = 0;   // the glyph's field takes the image's uv rect
+        const std::uint32_t feat = Material(plain, flatGlass, flatFill, m) & ~fx::kImage;
+        if ((feat & (fx::kFill | fx::kStroke | fx::kShadow | fx::kGlow | fx::kInnerGlow | fx::kGlass | fx::kCustom)) == 0 || m.misc[0] <= 0.0f)
+            return env_.text->Measure(font, text, wrapWidth, flags).size;
+        m.flags[0] = feat;
+        if (scaleDepth_ > 0)
+        {
+            // under PushScale: drawn at the final (scaled) geometry; PopScale skips it (the fields need no new bitmaps)
+            float k = 1.0f;
+            Vec2 at = pos;
+            for (int i = scaleDepth_ - 1; i >= 0; --i)
+            {
+                at = ScalePoint(at, scaleOrigin_[i], scaleValue_[i]);
+                k *= scaleValue_[i];
+            }
+            const std::size_t start = dl_->Vertices().size();
+            const Vec2 size = env_.text->DrawShapes(*dl_, font, at, m, s.effect, s.weight, text, wrapWidth, flags, k);
+            ExcludeFromScale(start);
+            return size;
+        }
+        return env_.text->DrawShapes(*dl_, font, pos, m, s.effect, s.weight, text, wrapWidth, flags, 1.0f);
+    }
+
+    Vec2 Painter::TextBox(const esia::Rect& r, Vec2 align, text::FontRef font, const Style& s, std::string_view text, std::uint32_t flags)
+    {
+        if (!env_.text)
+            return Vec2(0, 0);
+        const bool trim = (flags & text::TextFlags_Ellipsis) != 0;
+        const float wrap = trim ? std::max(r.Width(), 1.0f) : 0.0f;
+        const text::TextMetrics m = env_.text->Measure(font, text, wrap, flags);
+        const Vec2 pos(r.min.x + (r.Width() - m.size.x) * align.x, r.min.y + (r.Height() - m.size.y) * align.y);
+        Text(pos, font, s, text, wrap, flags);
+        return m.size;
     }
 
     Vec2 Painter::TextBox(const esia::Rect& r, Vec2 align, text::FontRef font, Color color, std::string_view text, std::uint32_t flags)

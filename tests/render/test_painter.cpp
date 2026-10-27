@@ -30,6 +30,21 @@ namespace
             calls += 'O';
             lastOutline = o;
         }
+        // the material and weight of the last DrawShapes
+        fx::Instance lastMaterial{};
+        float lastWeight = 0.0f;
+        EffectId lastEffect = 0;
+        Vec2 DrawShapes(DrawList&, text::FontRef f, Vec2 pos, const fx::Instance& m, EffectId effect, float weight, std::string_view s, float, std::uint32_t,
+                        float scale) override
+        {
+            calls += 's';
+            lastMaterial = m;
+            lastWeight = weight;
+            lastEffect = effect;
+            lastScale = scale;
+            lastPos = pos;
+            return Measure(f, s, 0, 0).size;
+        }
         text::FontId AddFontFile(const char*, int) override { return 1; }
         text::FontId AddFontMemory(const void*, std::size_t, int) override { return 1; }
         void AddFallback(text::FontId) override {}
@@ -478,4 +493,68 @@ ESIA_TEST(Painter, FlatTilesCoverAsTheShaderDoes)
     // pixel (3, 4) a little past half covered (its middle 0.08 inside the edge)
     ESIA_CHECK(at(1, 11) >= 250);
     ESIA_CHECK(at(3, 3) == 0 && at(3, 4) > 120 && at(3, 4) < 180);
+}
+
+// Text with a material: the style's rows and features go to the text system's glyph shapes - no image (the field
+// takes its uv), no radii -, the weight with them, under a scale at the final geometry; flat drawing drops shadows and
+// glows as for shapes.
+ESIA_TEST(Painter, TextWithAStyleHandsItsMaterialToTheTextSystem)
+{
+    DrawList dl = MakeList();
+    FakeText text;
+    PainterEnv env;
+    env.text = &text;
+    Painter p(dl, env);
+    const Style s = Style().Fill(Paint::Linear(Color::Hex(0xFF0000), Color::Hex(0x0000FF), 0)).Stroke(2, Color::Hex(0x00FF00), 1.0f).Shadow(Color::Black(0.5f), 4, Vec2(0, 2))
+                        .Glow(Color::White(), 6).Image(9).Radius(5).Weight(0.75f).Opacity(0.5f);
+    const Vec2 size = p.Text(Vec2(10, 20), text::FontRef{1, 10}, s, "abc");
+    ESIA_CHECK(text.calls == "s" && size == Vec2(18, 10) && text.lastPos == Vec2(10, 20) && text.lastScale == 1.0f);
+    const fx::Instance& m = text.lastMaterial;
+    ESIA_CHECK(m.flags[0] == (fx::kFill | fx::kStroke | fx::kShadow | fx::kGlow));   // no kImage
+    ESIA_CHECK(m.flags[1] == (std::uint32_t)fx::PaintKind::Linear && m.fill0[0] == 1.0f && m.fill1[2] == 1.0f);
+    ESIA_CHECK(m.stroke[1] == 1.0f && m.strokeParams[0] == 2.0f && m.strokeParams[1] == 1.0f);
+    ESIA_CHECK(m.shadowParams[0] == 4.0f && m.shadowParams[3] == 2.0f && m.glowParams[0] == 6.0f && m.misc[0] == 0.5f);
+    ESIA_CHECK(text.lastWeight == 0.75f && m.radii[0] == 0.0f && m.uvRect[2] == 0.0f);
+    ESIA_CHECK(dl.FxInstances().empty());   // the text system draws it
+
+    p.PushScale(Vec2(0, 0), 2.0f);
+    p.Text(Vec2(10, 20), text::FontRef{1, 10}, Style().Fill(Color::White()), "abc");
+    p.PopScale();
+    ESIA_CHECK(text.lastScale == 2.0f && text.lastPos == Vec2(20, 40));
+    const Vec2 box = p.TextBox(Rect(0, 100, 100, 140), Vec2(0.5f, 0.5f), text::FontRef{1, 10}, Style().Fill(Color::White()), "abcd");
+    ESIA_CHECK(box == Vec2(24, 10) && text.lastPos == Vec2(38, 115));
+    // nothing to draw: measured, not drawn
+    text.calls.clear();
+    ESIA_CHECK(p.Text(Vec2(0, 0), text::FontRef{1, 10}, Style(), "ab") == Vec2(12, 10) && text.calls.empty());
+
+    env.flat = true;
+    Painter flat(dl, env);
+    flat.Text(Vec2(0, 0), text::FontRef{1, 10}, s, "ab");
+    ESIA_CHECK(text.lastMaterial.flags[0] == (fx::kFill | fx::kStroke));   // no shadow, no glow
+}
+
+// A text system without distance fields draws the fill's first color, its opacity applied.
+ESIA_TEST(Painter, TextWithAStyleWithoutFieldsDrawsTheFillColor)
+{
+    struct PlainText final : text::TextSystem
+    {
+        Color drawn;
+        text::FontId AddFontFile(const char*, int) override { return 1; }
+        text::FontId AddFontMemory(const void*, std::size_t, int) override { return 1; }
+        void AddFallback(text::FontId) override {}
+        void NewFrame(const text::RasterParams&) override {}
+        text::TextMetrics Measure(text::FontRef f, std::string_view s, float, std::uint32_t) override { return {Vec2(6.0f * (float)s.size(), f.size), 8.0f, 1}; }
+        Vec2 Draw(DrawList&, text::FontRef f, Vec2, Color c, std::string_view s, float, std::uint32_t, float) override
+        {
+            drawn = c;
+            return Measure(f, s, 0, 0).size;
+        }
+        void DrawGlyph(DrawList&, text::FontRef, char32_t, Vec2, Color) override {}
+    } text;
+    DrawList dl = MakeList();
+    PainterEnv env;
+    env.text = &text;
+    Painter p(dl, env);
+    p.Text(Vec2(0, 0), text::FontRef{1, 10}, Style().Fill(Color(1, 0.5f, 0, 0.8f)).Opacity(0.5f), "ab");
+    ESIA_CHECK(text.drawn.r == 1.0f && text.drawn.g == 0.5f && std::fabs(text.drawn.a - 0.4f) < 1e-6f);
 }

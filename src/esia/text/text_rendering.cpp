@@ -1,5 +1,6 @@
 // Esia - TextRendering's presets and parser (include/esia/text/text.hpp).
 #include "esia/text/text.hpp"
+#include <cstdlib>
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -134,6 +135,16 @@ namespace esia::text
                     r.subpixel = SubpixelLayout::Bgr;
                 else
                     ok = false;
+            }
+            else if (name == "distance-field")
+            {
+                char* end = nullptr;
+                const std::string v(value);
+                const float px = std::strtof(v.c_str(), &end);
+                if (v.empty() || end != v.c_str() + v.size() || !(px >= 0.0f))
+                    ok = false;
+                else
+                    r.distanceFieldFrom = px;
             }
             else if (name == "lcd-filter")
             {

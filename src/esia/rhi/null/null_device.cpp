@@ -1,6 +1,7 @@
 // Esia - null RHI backend (see esia/rhi/null_device.hpp)
 #include "esia/rhi/null_device.hpp"
 #include "esia/rhi/backend_registry.hpp"
+#include "esia/core/fx.hpp"
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -269,8 +270,9 @@ namespace esia::rhi
             Error("CreatePipeline: TextLcd needs (and only it may use) dual-source blending");
         const Pipeline p{next_++};
         pipelines_[p.id] = d;
-        if (d.fxFeatures != 0 && (!caps_.fxFeatureVariants || d.program != ShaderProgram::Fx))
-            Error("CreatePipeline: fxFeatures without Caps::fxFeatureVariants or on a non-Fx program");
+        const bool glyphVariant = !caps_.fullFxGlyphs && (d.fxFeatures & fx::kGlyph);
+        if (d.fxFeatures != 0 && ((!caps_.fxFeatureVariants && !glyphVariant) || d.program != ShaderProgram::Fx))
+            Error("CreatePipeline: fxFeatures without Caps::fxFeatureVariants (or glyph shapes without Caps::fullFxGlyphs) or on a non-Fx program");
         const bool background = d.background && caps_.asyncPipelines;
         if (background)
             pipelineReadyAt_[p.id] = frame_ + (std::uint64_t)std::max(options_.pendingFrames, 0);

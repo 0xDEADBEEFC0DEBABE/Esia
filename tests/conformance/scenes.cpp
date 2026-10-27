@@ -2,8 +2,11 @@
 // randomness; what moves (shimmer, light streak) is sampled at the same time on every run.
 #include "scenes.hpp"
 #include "esia/render/painter.hpp"
+#include "esia/text/distance_field.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace esia::conformance
 {
@@ -326,6 +329,195 @@ namespace esia::conformance
             p.EndGlowLayer();
         }
 
+        // ------------------------------------------------------------------ glyph fields
+        // Three glyphs as distance fields (MTSDF, made here as a text system makes them: 48 field pixels per em,
+        // ranges 8 and 24) on one page: an E (right angles), an O (curves, a hole), a star (acute corners).
+        constexpr float kFieldEm = 48.0f;
+        struct FieldGlyph
+        {
+            int x = 0, w = 0, h = 0;      // in the page
+            int left = 0, top = 0;        // field pixels from the pen
+            float advance = 0.0f;         // field pixels
+        };
+        struct FieldPage
+        {
+            TextureId page = 0;
+            int width = 0, height = 0;
+            FieldGlyph glyphs[3];
+        };
+
+        FieldPage MakeFieldPage(TextureRegistry& reg)
+        {
+            text::GlyphShape shapes[3];
+            // E: 30 x 36 above the baseline
+            text::GlyphShape& e = shapes[0];
+            e.MoveTo(Vec2(4, -36));
+            for (const Vec2 v : {Vec2(30, -36), Vec2(30, -30), Vec2(11, -30), Vec2(11, -21), Vec2(27, -21), Vec2(27, -15), Vec2(11, -15),
+                                 Vec2(11, -6), Vec2(30, -6), Vec2(30, 0), Vec2(4, 0)})
+                e.LineTo(v);
+            // O: a ring of cubics
+            const auto circle = [](text::GlyphShape& s, Vec2 c, float rx, float ry, bool reverse) {
+                const float kx = 0.5522847f * rx, ky = 0.5522847f * ry;
+                s.MoveTo(c + Vec2(rx, 0));
+                if (!reverse)
+                {
+                    s.CubicTo(c + Vec2(rx, ky), c + Vec2(kx, ry), c + Vec2(0, ry));
+                    s.CubicTo(c + Vec2(-kx, ry), c + Vec2(-rx, ky), c + Vec2(-rx, 0));
+                    s.CubicTo(c + Vec2(-rx, -ky), c + Vec2(-kx, -ry), c + Vec2(0, -ry));
+                    s.CubicTo(c + Vec2(kx, -ry), c + Vec2(rx, -ky), c + Vec2(rx, 0));
+                }
+                else
+                {
+                    s.CubicTo(c + Vec2(rx, -ky), c + Vec2(kx, -ry), c + Vec2(0, -ry));
+                    s.CubicTo(c + Vec2(-kx, -ry), c + Vec2(-rx, -ky), c + Vec2(-rx, 0));
+                    s.CubicTo(c + Vec2(-rx, ky), c + Vec2(-kx, ry), c + Vec2(0, ry));
+                    s.CubicTo(c + Vec2(kx, ry), c + Vec2(rx, ky), c + Vec2(rx, 0));
+                }
+            };
+            circle(shapes[1], Vec2(19, -18), 16, 18.5f, false);
+            circle(shapes[1], Vec2(19, -18), 9, 11.5f, true);
+            // a five-pointed star, its points acute
+            text::GlyphShape& star = shapes[2];
+            for (int i = 0; i < 10; ++i)
+            {
+                const float a = -1.5707963f + (float)i * 0.62831853f, r = (i % 2) ? 7.5f : 19.0f;
+                const Vec2 v(20.0f + std::cos(a) * r, -18.0f + std::sin(a) * r);
+                if (i == 0)
+                    star.MoveTo(v);
+                else
+                    star.LineTo(v);
+            }
+            FieldPage page;
+            text::GlyphBitmap fields[3];
+            int x = 0, h = 0;
+            for (int i = 0; i < 3; ++i)
+            {
+                text::GenerateMtsdf(shapes[i], {8.0f, 24.0f}, fields[i]);
+                FieldGlyph& g = page.glyphs[i];
+                g.x = x;
+                g.w = fields[i].width;
+                g.h = fields[i].height;
+                g.left = fields[i].left;
+                g.top = fields[i].top;
+                g.advance = i == 0 ? 34.0f : 40.0f;
+                x += g.w + 1;
+                h = std::max(h, g.h);
+            }
+            page.width = x;
+            page.height = h;
+            std::vector<std::uint8_t> px((std::size_t)page.width * (std::size_t)page.height * 4, 0);
+            for (int i = 0; i < 3; ++i)
+                for (int y = 0; y < fields[i].height; ++y)
+                    std::memcpy(px.data() + ((std::size_t)y * (std::size_t)page.width + (std::size_t)page.glyphs[i].x) * 4,
+                                fields[i].pixels.data() + (std::size_t)y * (std::size_t)fields[i].width * 4, (std::size_t)fields[i].width * 4);
+            TextureInfo info;
+            info.format = TextureFormat::RGBA8;
+            info.width = page.width;
+            info.height = page.height;
+            info.flags = TextureFlags_DistanceField;
+            page.page = reg.Create(info, px.data());
+            return page;
+        }
+
+        // A run of field glyphs (0 E, 1 O, 2 star) as TextSystem::DrawShapes makes them: the outer layers of all of
+        // them, then the faces, the run's box in rect (paints span it), each field's extent in shape2.
+        void FieldText(Painter& p, const FieldPage& page, const std::vector<int>& run, Vec2 pen, float em, fx::Instance m, float weight = 0.0f)
+        {
+            const float k = em / kFieldEm;
+            float width = 0.0f;
+            for (int g : run)
+                width += page.glyphs[g].advance * k;
+            const std::uint32_t feat = m.flags[0];
+            std::uint32_t under = 0;
+            if ((feat & fx::kShadow) && !(feat & fx::kInnerShadow))
+                under |= fx::kShadow;
+            if (feat & fx::kGlow)
+                under |= fx::kGlow;
+            if ((feat & fx::kStroke) && m.strokeParams[1] >= 1.0f)
+                under |= fx::kStroke;
+            for (const std::uint32_t pass : {under, feat & ~under})
+            {
+                if (pass == 0)
+                    continue;
+                float x = pen.x;
+                for (int gi : run)
+                {
+                    const FieldGlyph& g = page.glyphs[gi];
+                    fx::Instance in = m;
+                    in.rect[0] = pen.x;
+                    in.rect[1] = pen.y - 36.0f * k;
+                    in.rect[2] = pen.x + width;
+                    in.rect[3] = pen.y;
+                    in.shape2[0] = x + (float)g.left * k;
+                    in.shape2[1] = pen.y + (float)g.top * k;
+                    in.shape2[2] = in.shape2[0] + (float)g.w * k;
+                    in.shape2[3] = in.shape2[1] + (float)g.h * k;
+                    in.uvRect[0] = (float)g.x / (float)page.width;
+                    in.uvRect[1] = 0.0f;
+                    in.uvRect[2] = (float)(g.x + g.w) / (float)page.width;
+                    in.uvRect[3] = (float)g.h / (float)page.height;
+                    in.radii[0] = 8.0f;
+                    in.radii[1] = 24.0f;
+                    in.shape[2] = 1.0f / k;
+                    in.shape[3] = weight;
+                    in.flags[0] = pass | fx::kGlyph;
+                    in.flags[2] = (std::uint32_t)fx::ShapeKind::Glyph;
+                    p.Emit(in, 0, page.page);
+                    x += g.advance * k;
+                }
+            }
+        }
+
+        fx::Instance FieldMaterial(Color fill)
+        {
+            fx::Instance m;
+            std::memset(&m, 0, sizeof(m));
+            for (int c = 0; c < 4; ++c)
+                m.fill0[c] = m.fill1[c] = (&fill.r)[c];
+            m.misc[0] = 1.0f;
+            m.flags[0] = fx::kFill;
+            return m;
+        }
+
+        void TextFields(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl);
+            p.Rect(Rect(0, 0, 320, 240), Style().Fill(Color::Hex(0x1C1C1E)));
+            p.Rect(Rect(0, 150, 320, 240), Style().Fill(Color::Hex(0xF2F2F7)));
+            const FieldPage page = MakeFieldPage(f.textures);
+            // plain, at three sizes: the same fields
+            FieldText(p, page, {0, 1, 2}, Vec2(10, 30), 20, FieldMaterial(Color::White()));
+            FieldText(p, page, {0, 1, 2}, Vec2(80, 30), 12, FieldMaterial(kYellow));
+            // magnified: corners and curves stay sharp
+            FieldText(p, page, {0, 2}, Vec2(130, 110), 80, FieldMaterial(Color::White()));
+            // an outline outside and a glow under every face
+            fx::Instance glow = FieldMaterial(Color::White());
+            glow.flags[0] |= fx::kStroke | fx::kGlow;
+            std::memcpy(glow.stroke, &kBlue.r, sizeof(glow.stroke));
+            glow.strokeParams[0] = 2.0f;
+            glow.strokeParams[1] = 1.0f;
+            glow.strokeParams[2] = 1.0f;
+            std::memcpy(glow.glow, &kPink.r, sizeof(glow.glow));
+            glow.glowParams[0] = 10.0f;
+            glow.glowParams[1] = 1.0f;
+            FieldText(p, page, {0, 1, 2}, Vec2(10, 80), 28, glow);
+            // a gradient across the run, a drop shadow, on the light half
+            fx::Instance shade = FieldMaterial(kOrange);
+            shade.flags[1] = (std::uint32_t)fx::PaintKind::Linear;
+            std::memcpy(shade.fill1, &kPurple.r, sizeof(shade.fill1));
+            shade.flags[0] |= fx::kShadow;
+            const Color shadow = Color::Black(0.45f);
+            std::memcpy(shade.shadow, &shadow.r, sizeof(shade.shadow));
+            shade.shadowParams[0] = 4.0f;
+            shade.shadowParams[2] = 2.0f;
+            shade.shadowParams[3] = 3.0f;
+            FieldText(p, page, {0, 1, 2, 0}, Vec2(10, 200), 30, shade);
+            // weight: thinner and bolder from the same fields
+            FieldText(p, page, {0, 1}, Vec2(200, 190), 24, FieldMaterial(Color::Black()), -0.8f);
+            FieldText(p, page, {0, 1}, Vec2(200, 225), 24, FieldMaterial(Color::Black()), 1.2f);
+        }
+
         void EdgeFade(SceneFrame& f)
         {
             DrawList& dl = f.NewList();
@@ -516,6 +708,8 @@ namespace esia::conformance
             add("text", "text quads from an Alpha8 test atlas (grayscale text program, gamma / contrast composition) on dark and light", &Text);
             Scene& lcd = add("text_lcd", "sub-pixel text pages (dual-source blending) and their grayscale fallback inside glow layers", &TextLcd);
             lcd.needsDualSource = true;
+            add("text_fields", "distance-field glyph shapes (FX): plain at three sizes, magnified, an outline and a glow under the faces, a gradient across a run, a drop shadow, weight",
+                &TextFields);
             add("edge_fade", "edge fades (per-draw constants) on SDF shapes, text and geometry inside clip rects", &EdgeFade);
             add("clipping", "nested / replacing clip rects (scissors), rounded masks, image fills with uv sub-rects, textured geometry", &Clipping);
             Scene& win = add("windows", "the UI core end to end: background list, overlapping windows (z-order, clip, layout cursor), foreground list", &Windows);

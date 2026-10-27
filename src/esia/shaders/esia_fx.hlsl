@@ -19,6 +19,10 @@
 #ifdef ESIA_SPIRV
 [[vk::constant_id(0)]] const uint kEsiaFxFeatures = 0xFFFFFFFFu;
 #define ESIA_FX_FEATURES kEsiaFxFeatures
+#elif defined(ESIA_SM3)
+// SM3's 32 temporary registers hold the full shader without the glyph code: glyph batches take variants
+// (rhi::Caps::fullFxGlyphs)
+#define ESIA_FX_FEATURES (0xFFFFFFFFu & ~32768u)
 #else
 #define ESIA_FX_FEATURES 0xFFFFFFFFu
 #endif
@@ -39,6 +43,7 @@
 #define F_CUSTOM       4096u
 #define F_HALO         8192u
 #define F_CAUSTIC      16384u
+#define F_GLYPH        32768u
 
 // Shape kinds (esia::fx::ShapeKind) and paint kinds (esia::fx::PaintKind), compared with the flags row: plain
 // literals take the type of what they are compared with (a uint on SM4+, the float SM3 emulates it with), so
@@ -46,6 +51,7 @@
 #define SHAPE_RRECT    0
 #define SHAPE_ARC      1
 #define SHAPE_SEGMENT  2
+#define SHAPE_GLYPH    3
 
 #define PAINT_SOLID    0
 #define PAINT_LINEAR   1
@@ -215,6 +221,11 @@ FxPSIn FxVS(FxVSIn v)
         mn = min(mn, shape2.xy);
         mx = max(mx, shape2.zw);
     }
+    if FX_HAS(feat, F_GLYPH)
+    {
+        mn = shape2.xy;   // the glyph's field, not the text's box
+        mx = shape2.zw;
+    }
     float pad = 2.0;
     if FX_HAS(feat, F_STROKE)
         pad = max(pad, strokeParams.x * strokeParams.y + 2.0);
@@ -338,13 +349,39 @@ float SminPoly(float a, float b, float k)
     return min(a, b) - h * h * k * 0.25;
 }
 
+// A glyph's distance field on gTex (esia::fx::ShapeKind::Glyph, the field's extent in shape2): near the edge the
+// median of R, G, B - sharp corners at any scale -, farther out the true distance in A, which reaches farther
+// (glows, shadows). Where A saturates (half its range out) and past the field the distance to the glyph's ink box
+// (the field less its margin) takes over: a lower bound that keeps growing, so glows and shadows fade out instead of
+// standing on a plateau up to the field's edge. Negative inside, UI units, grown by the weight.
+float SdGlyph(float2 p, FxInst I)
+{
+    const float unit = 1.0 / max(I.shape.z, 1e-6);   // UI units per field pixel
+    const float2 inner = clamp(p, I.shape2.xy, I.shape2.zw);
+    const float2 uv = lerp(I.uvRect.xy, I.uvRect.zw, (inner - I.shape2.xy) / max(I.shape2.zw - I.shape2.xy, 1e-6));
+    const float4 f = ESIA_SAMPLE_LEVEL(gTex, gLinear, uv);
+    const float multi = (max(min(f.r, f.g), min(max(f.r, f.g), f.b)) - 0.5) * I.radii.x;
+    const float single = (f.a - 0.5) * I.radii.y;
+    // the multi-channel distance saturates at half its range: the true one takes over a pixel and a half before
+    const float inside = lerp(multi, single, saturate(abs(single) - (0.5 * I.radii.x - 1.5)));
+    // the ink box, signed: inside the glyph never above its own distance, outside never beyond it
+    const float margin = (0.5 * I.radii.y + 1.0) * unit;
+    const float2 q = abs(p - (I.shape2.xy + I.shape2.zw) * 0.5) - max((I.shape2.zw - I.shape2.xy) * 0.5 - margin, 0.0);
+    const float box = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+    return max(-inside * unit, box) - I.shape.w;
+}
+
 float ShapeSD(float2 p, FxInst I)
 {
     uint kind = I.flags.z;
     float2 center = (I.rect.xy + I.rect.zw) * 0.5;
     float2 halfSize = max((I.rect.zw - I.rect.xy) * 0.5, 1e-3);
     float d;
-    [branch] if (kind == SHAPE_ARC)
+    [branch] if (FX_HAS(I.flags.x, F_GLYPH))
+    {
+        d = SdGlyph(p, I);
+    }
+    else if (kind == SHAPE_ARC)
     {
         d = SdArc(p - center, I.radii.x, I.radii.y, I.shape.z, I.shape.w);
     }
@@ -646,11 +683,16 @@ float4 FxPS(FxPSIn i) : SV_Target
     }
 #endif
 
-    // the second shape of a liquid merge, the end points of a segment
+    // the second shape of a liquid merge, the end points of a segment, a glyph's field
     [branch] if (I.flags.z == SHAPE_SEGMENT || FX_HAS(feat, F_MERGE))
     {
         FX_FETCH(I, shape2)
         FX_FETCH(I, shape2Params)
+    }
+    [branch] if FX_HAS(feat, F_GLYPH)
+    {
+        FX_FETCH(I, shape2)
+        FX_FETCH(I, uvRect)
     }
     float d = ShapeSD(p, I);
     float cov = saturate(0.5 - d / px);

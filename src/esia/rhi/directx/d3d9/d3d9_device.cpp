@@ -313,6 +313,7 @@ namespace esia::rhi::d3d9
             caps_.fxStorage = FxStorage::Texture;
             caps_.shaderFormat = (std::uint8_t)shaders::Format::DxbcSm3;
             caps_.halfPixelOffset = true;
+            caps_.fullFxGlyphs = false;   // the full ps_3_0 FX shader has no registers left for glyph shapes
             caps_.dualSourceBlend = false;
             caps_.floatRenderTargets = Supports(D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING | D3DUSAGE_QUERY_FILTER, D3DFMT_A16B16G16R16F);
             caps_.sampleRenderTarget = true;

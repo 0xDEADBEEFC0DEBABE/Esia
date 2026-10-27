@@ -719,6 +719,52 @@ ESIA_TEST(Renderer, RefusedOrFailedVariantsFallBackToTheFullShader)
     }
 }
 
+// Glyph shapes on a device whose full FX shader has no glyph code (Caps::fullFxGlyphs, Direct3D 9): their batch takes
+// its variant, built at once even where variants are off; a refused one is not drawn (nothing else could draw it).
+ESIA_TEST(Renderer, GlyphShapesTakeTheirVariantWhereTheFullShaderLacksThem)
+{
+    Caps caps;
+    caps.fullFxGlyphs = false;
+    caps.fxFeatureVariants = false;
+    caps.asyncPipelines = true;
+    DrawList dl = MakeList();
+    Painter p(dl);
+    p.Rect(Rect(10, 10, 50, 50), Style().Fill(Color::White()));
+    fx::Instance glyph;
+    std::memset(&glyph, 0, sizeof(glyph));
+    glyph.rect[2] = glyph.rect[3] = 40.0f;
+    glyph.shape2[0] = glyph.shape2[1] = 100.0f;
+    glyph.shape2[2] = glyph.shape2[3] = 140.0f;
+    glyph.fill0[3] = glyph.misc[0] = 1.0f;
+    glyph.flags[0] = fx::kFill | fx::kGlyph;
+    glyph.flags[2] = (std::uint32_t)fx::ShapeKind::Glyph;
+    p.Emit(glyph, 0, 9);
+    for (const bool refuse : {false, true})
+    {
+        NullOptions o{caps};
+        o.refuseFxVariants = refuse;
+        NullDevice dev(o);
+        const Texture target = dev.CreateHostTarget(400, 300, Format::RGBA8_UNORM, true);
+        Renderer r(dev);
+        r.Render(Data({&dl}), nullptr, target);
+        ESIA_CHECK(NoErrors(dev));
+        if (!refuse)
+        {
+            // the rectangle with the full shader, the glyph with its variant - not in the background
+            ESIA_CHECK(Lines(dev, "Fx strip premul RGBA8_UNORM features=0x8001") == 1 && Lines(dev, "background") == 0);
+            ESIA_CHECK(Lines(dev, "draw instanced") == 2 && r.Stats().fxFallbacks == 0);
+        }
+        else
+            ESIA_CHECK(Lines(dev, "draw instanced") == 1 && r.Stats().fxFallbacks == 1);
+    }
+    // a device whose full shader draws them: one batch shape, no variant
+    NullDevice dev(NullOptions{Caps{}});
+    const Texture target = dev.CreateHostTarget(400, 300, Format::RGBA8_UNORM, true);
+    Renderer r(dev);
+    r.Render(Data({&dl}), nullptr, target);
+    ESIA_CHECK(NoErrors(dev) && Lines(dev, "features=") == 0 && Lines(dev, "draw instanced") >= 1);
+}
+
 ESIA_TEST(Renderer, VariantsCompilingInTheBackgroundDrawWithAReadyPipeline)
 {
     Caps caps;

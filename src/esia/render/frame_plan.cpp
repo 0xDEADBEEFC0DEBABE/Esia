@@ -19,18 +19,25 @@ namespace esia::render
             PxRect operator()(const Rect& r) const { return (*this)(r.min.x, r.min.y, r.max.x, r.max.y); }
         };
 
+        // The shape an instance draws, before its shadow / glow: its rect (with a liquid merge's second rect), or a
+        // glyph's field (its rect is the text's box). Must mirror FxVS (esia_fx.hlsl).
+        Rect ShapeBox(const fx::Instance& in)
+        {
+            const std::uint32_t feat = in.flags[0];
+            if (feat & fx::kGlyph)
+                return Rect(in.shape2[0], in.shape2[1], in.shape2[2], in.shape2[3]);
+            Rect r(in.rect[0], in.rect[1], in.rect[2], in.rect[3]);
+            if (feat & fx::kMerge)
+                r = r.Union(Rect(in.shape2[0], in.shape2[1], in.shape2[2], in.shape2[3]));
+            return r;
+        }
+
         // Must mirror the quad expansion in FxVS (esia_fx.hlsl).
         void InstanceExtent(const fx::Instance& in, float out[4])
         {
             const std::uint32_t feat = in.flags[0];
-            float x0 = in.rect[0], y0 = in.rect[1], x1 = in.rect[2], y1 = in.rect[3];
-            if (feat & fx::kMerge)
-            {
-                x0 = std::min(x0, in.shape2[0]);
-                y0 = std::min(y0, in.shape2[1]);
-                x1 = std::max(x1, in.shape2[2]);
-                y1 = std::max(y1, in.shape2[3]);
-            }
+            const Rect shape = ShapeBox(in);
+            float x0 = shape.min.x, y0 = shape.min.y, x1 = shape.max.x, y1 = shape.max.y;
             float pad = 2.0f;
             if (feat & fx::kStroke)
                 pad = std::max(pad, in.strokeParams[0] * in.strokeParams[1] + 2.0f);
@@ -84,14 +91,8 @@ namespace esia::render
         void InstanceJoinReach(const fx::Instance& in, float out[4])
         {
             const std::uint32_t feat = in.flags[0];
-            float x0 = in.rect[0], y0 = in.rect[1], x1 = in.rect[2], y1 = in.rect[3];
-            if (feat & fx::kMerge)
-            {
-                x0 = std::min(x0, in.shape2[0]);
-                y0 = std::min(y0, in.shape2[1]);
-                x1 = std::max(x1, in.shape2[2]);
-                y1 = std::max(y1, in.shape2[3]);
-            }
+            const Rect shape = ShapeBox(in);
+            float x0 = shape.min.x, y0 = shape.min.y, x1 = shape.max.x, y1 = shape.max.y;
             const float sx0 = x0, sy0 = y0, sx1 = x1, sy1 = y1;
             float pad = 1.0f;
             if (feat & fx::kStroke)
@@ -325,9 +326,7 @@ namespace esia::render
                         // glass keeps its clip: its capture regions are planned within it
                         // the shape plus the part of its shadow / glow that is still visible (> 4%): the faint outer
                         // tails vanish through blurred glass, so they never force a new backdrop capture
-                        PxRect shapeR = map(in.rect[0], in.rect[1], in.rect[2], in.rect[3]);
-                        if (in.flags[0] & fx::kMerge)
-                            shapeR = shapeR.Union(map(in.shape2[0], in.shape2[1], in.shape2[2], in.shape2[3]));
+                        const PxRect shapeR = map(ShapeBox(in));
                         // glass and user effects (which may call WgtBackdrop()) read the captured backdrop
                         const bool glass = (in.flags[0] & (fx::kGlass | fx::kCustom)) != 0;
                         // Liquid glass shapes are tracked apart from other content: like SwiftUI's glass effect

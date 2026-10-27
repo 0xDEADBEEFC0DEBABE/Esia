@@ -14,6 +14,7 @@
 #pragma once
 #include "esia/base/math.hpp"
 #include "esia/base/utf8.hpp"
+#include "esia/core/fx.hpp"
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -132,6 +133,10 @@ namespace esia::text
         bool hintedAdvances = false;
         SubpixelLayout subpixel = SubpixelLayout::None;   // sub-pixel (LCD) antialiasing, for panels of that layout
         LcdFilter lcdFilter = LcdFilter::Default;
+        // Text of this many physical pixels per em and more draws from distance fields (DrawShapes with its color):
+        // one field per glyph for every size - large and animated text without a bitmap per size, sharp under any
+        // scale. 0: never (small text is better hinted and covered per pixel).
+        float distanceFieldFrom = 0.0f;
 
         bool operator==(const TextRendering&) const = default;
 
@@ -178,6 +183,7 @@ namespace esia::text
     //   design | light | crisp | cleartype | native
     //   hinting=none|light|full|auto   interpreter=35|40   rasterizer=analytic|freetype
     //   stem-darkening[=0|1]   hinted-advances[=0|1]   subpixel=none|rgb|bgr   lcd-filter=default|light|none
+    //   distance-field=<pixels per em, 0 = never>
     // e.g. "crisp", "native,stem-darkening=0", "hinting=full,interpreter=35", "cleartype,subpixel=bgr". False (and `out`
     // unchanged) on a word it does not know, which `error` then names.
     ESIA_API bool ParseTextRendering(std::string_view spec, TextRendering& out, std::string* error = nullptr);
@@ -229,6 +235,20 @@ namespace esia::text
         virtual void DrawGlyphOutline(DrawList& dl, FontRef font, char32_t codepoint, Vec2 center, const TextOutline& outline)
         {
             (void)dl, (void)font, (void)codepoint, (void)center, (void)outline;
+        }
+        // `text` as glyph shapes for the FX pipeline (fx::ShapeKind::Glyph): every glyph an instance made from
+        // `material` - its material rows (paint, stroke, shadow, glow, glass, misc, mask, custom) and features
+        // (flags[0]); the text system puts in the glyph's distance field (rect, page, uv, ranges), its kind, and
+        // `weight` (UI units every glyph grows by, < 0 thins). The outer layers of all glyphs - drop shadow, outer glow,
+        // a stroke outside - go first, then the faces of all glyphs, so no glyph's outer layer covers another's face.
+        // Glyphs without outlines (color, bitmap fonts) draw as Draw draws them, in the fill's first color. Same
+        // layout and result as Draw. This default (no distance fields) draws the fill's first color with Draw.
+        virtual Vec2 DrawShapes(DrawList& dl, FontRef font, Vec2 pos, const fx::Instance& material, EffectId effect, float weight,
+                                std::string_view text, float wrapWidth = 0.0f, std::uint32_t flags = 0, float scale = 1.0f)
+        {
+            (void)effect, (void)weight;
+            const Color fill(material.fill0[0], material.fill0[1], material.fill0[2], material.fill0[3] * material.misc[0]);
+            return Draw(dl, font, pos, fill, text, wrapWidth, flags, scale);
         }
         // Coverage tiles other than glyphs, in the texture text is drawn with (the corners of Painter's flat shapes, so
         // they batch with the text) and kept apart from the glyphs: the tile cached under `key`, else null; AddTile packs

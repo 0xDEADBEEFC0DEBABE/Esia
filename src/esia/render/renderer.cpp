@@ -543,19 +543,25 @@ namespace esia::render
         // An FX batch's pipeline: its feature variant (Caps::fxFeatureVariants) when it is ready. While the variant
         // compiles in the background (Caps::asyncPipelines) a ready variant that covers the batch's features stands
         // in - the smallest one - else the full shader; a refused or failed variant falls back to the full shader.
-        // The full shader is only asked for when it is needed: on SM3 it is the slowest compile of all.
+        // The full shader is only asked for when it is needed: on SM3 it is the slowest compile of all. A batch of
+        // glyph shapes on a device whose full shader has no glyph code (Caps::fullFxGlyphs) waits for a variant.
         rhi::Pipeline FxPipeline(std::uint32_t features)
         {
             if (features == 0)
                 return GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied);
-            const rhi::Pipeline variant = GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied, 0, features, caps.asyncPipelines);
+            // glyph shapes the full shader cannot draw (Caps::fullFxGlyphs): their variant, built at once - nothing
+            // could stand in for it while it compiled
+            const bool glyphVariant = !caps.fullFxGlyphs && (features & fx::kGlyph);
+            const rhi::Pipeline variant = GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied, 0, features, caps.asyncPipelines && !glyphVariant);
             const rhi::PipelineStatus status = variant ? dev.GetPipelineStatus(variant) : rhi::PipelineStatus::Failed;
             if (status == rhi::PipelineStatus::Ready)
                 return variant;
+            // the full shader may not draw glyph shapes (Caps::fullFxGlyphs): such a batch waits for a variant
+            const bool fullDraws = caps.fullFxGlyphs || !(features & fx::kGlyph);
             if (status == rhi::PipelineStatus::Failed)
             {
                 ++stats.fxFallbacks;
-                return GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied);
+                return fullDraws ? GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied) : rhi::Pipeline();
             }
             ++stats.fxPendingVariants;
             rhi::Pipeline best;
@@ -569,7 +575,7 @@ namespace esia::render
                 best = p;
                 bestBits = std::popcount(k.features);
             }
-            return best ? best : GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied);
+            return best || !fullDraws ? best : GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied);
         }
 
         bool BindPipeline(rhi::Pipeline p)
@@ -825,8 +831,10 @@ namespace esia::render
             }
             ProfileRun(op.glass ? RunFxGlass : RunFx);
             EnsureContentPass();
-            // a shader specialized to the features this batch uses, where the backend builds variants
-            const std::uint32_t features = caps.fxFeatureVariants ? op.features : 0u;
+            // a shader specialized to the features this batch uses, where the backend builds variants (glyph shapes on
+            // a device whose full shader has no glyph code: there too)
+            const bool glyphVariant = !caps.fullFxGlyphs && (op.features & fx::kGlyph);
+            const std::uint32_t features = caps.fxFeatureVariants || glyphVariant ? op.features : 0u;
             rhi::Pipeline p = op.effect != 0 && caps.runtimeEffects ? GetPipeline(rhi::ShaderProgram::Fx, rhi::BlendMode::Premultiplied, op.effect, features)
                                                                     : rhi::Pipeline{};
             if (!p)

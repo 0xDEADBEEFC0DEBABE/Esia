@@ -188,6 +188,14 @@ Verified on the RTX 4080 SUPER: clang-cl 22.1.8 and MSVC 19.44 (`/W4 /WX`) with 
 scenes); D3D12 GPU-based validation clean. Largest differences from the llvmpipe goldens: D3D9 `srgb_msaa` 33 and
 `msaa_target` 25 (under 0.02 % of the pixels), everything else 20 or less.
 
+### Glyph shapes (2026-10-28)
+
+FX glyph shapes (distance-field text, `fx::kGlyph`) did not fit ps_3_0's 32 temporary registers in the full FX shader
+(X4505). SM3's full shader now leaves the glyph code out (`ESIA_SM3` in the prelude), D3D9 reports
+`Caps::fullFxGlyphs = false`, and glyph batches build their feature variant at once, even on GPUs where variants are
+off (4096 instruction slots). On the RTX 4080 SUPER `text_fields` passes on D3D9 to the pixel of the D3D11 golden, and
+on D3D10 / 11 / 12.
+
 ### Sub-pixel text back (2026-10-28)
 
 The owner asked for sub-pixel text again: the D3D10 / 11 / 12 `DualSourceLcd` blend states (`SRC1_COLOR` /
