@@ -96,7 +96,8 @@ namespace esia::conformance
             return reg.Create(info, px.data());
         }
 
-        // "Text": one quad per glyph ('a'..'h', space), `h` UI units high, pixel-snapped like a text engine does.
+        // "Text": one quad per glyph ('a'..'h', space), `h` UI units high, pixel-snapped like a text engine does; drawn
+        // instanced, as glyphs are (QuadInstance).
         float Glyphs(DrawList& dl, TextureId atlas, Vec2 pos, const char* s, float h, Color color, float pixelScale = 1.0f)
         {
             const float w = h * 0.5f;
@@ -107,7 +108,7 @@ namespace esia::conformance
                 {
                     const int g = *s - 'a';
                     const float sx = std::round(x * pixelScale) / pixelScale, sy = std::round(pos.y * pixelScale) / pixelScale;
-                    dl.AddImage(atlas, Rect(sx, sy, sx + w, sy + h), Vec2((float)g / kCells, 0), Vec2((float)(g + 1) / kCells, 1), color.ToRgba8());
+                    dl.AddQuad(atlas, Rect(sx, sy, sx + w, sy + h), Vec2((float)g / kCells, 0), Vec2((float)(g + 1) / kCells, 1), color.ToRgba8());
                 }
                 x += h * 0.56f;
             }
@@ -787,6 +788,11 @@ namespace esia::conformance
                               &Shapes);
             rows.golden = "shapes";
             rows.fxInstancesPerRow = 2;
+            Scene& quadRows = add("quad_rows", "the text scene with 16 quads per row of the instance texture (FxStorage::Texture: the quads' rows after the FX "
+                                               "instances')",
+                                  &Text);
+            quadRows.golden = "text";
+            quadRows.fxInstancesPerRow = 2;
             return s;
         }
 

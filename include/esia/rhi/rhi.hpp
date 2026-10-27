@@ -22,8 +22,9 @@
 //     Vulkan render passes need no state carried across passes.
 //   * Fixed binding model (docs/backends/README.md, "Binding model"), identical in every shader:
 //       constants  Frame (b0), Pass (b1), Draw (b2)
-//       textures   t0 main texture, t1..t6 backdrop pyramid, t7 FX instance data (FxStorage::Texture)
-//       buffers    t7 FX instance data (FxStorage::Buffer: structured / storage buffer of float4)
+//       textures   t0 main texture, t1..t6 backdrop pyramid, t7 instance data (FxStorage::Texture)
+//       buffers    t7 instance data (FxStorage::Buffer: structured / storage buffer of float4): FX instances, then
+//                  the instanced quads (esia::QuadInstance)
 //       samplers   s0 linear clamp, s1 point clamp (fixed per shader; the shader manifest says which texture
 //                  uses which sampler, for APIs with combined samplers)
 //   * Coordinates are render-target pixels with the origin at the top-left, y down, for scissors, copies and
@@ -82,7 +83,7 @@ namespace esia::rhi
     {
         Vertex,        // esia::Vertex (VertexLayout::UiVertex)
         Index,         // uint32 indices
-        FxInstances,   // float4 array bound at t7 (Caps::fxStorage == FxStorage::Buffer)
+        FxInstances,   // float4 array bound at t7: FX instances and quads (Caps::fxStorage == FxStorage::Buffer)
     };
 
     struct BufferDesc
@@ -134,6 +135,12 @@ namespace esia::rhi
         Clear,            // FullscreenVS + ClearPS: clears the scissor rect to transparent black
         TextLcd,          // UiVS + TextLcdPS: sub-pixel (LCD) glyph coverage, per-channel alpha (BlendMode::DualSourceLcd)
         TextLcdGray,      // UiVS + TextLcdGrayPS: sub-pixel pages with their grayscale coverage (layers, no dual-source)
+        // Instanced quads (esia::QuadInstance: glyphs, flat tiles; QuadVS, 4-vertex strips, rows of the instance data)
+        // with the pixel shaders of the four above
+        QuadImage,        // QuadVS + UiPS: a color texture
+        QuadGray,         // QuadVS + TextGrayPS: Alpha8 coverage
+        QuadLcd,          // QuadVS + TextLcdPS: sub-pixel coverage (BlendMode::DualSourceLcd)
+        QuadLcdGray,      // QuadVS + TextLcdGrayPS: sub-pixel pages with their grayscale coverage
         Count
     };
     ESIA_API const char* ShaderProgramName(ShaderProgram p);
@@ -142,6 +149,14 @@ namespace esia::rhi
     {
         return p == ShaderProgram::UiGeometry || p == ShaderProgram::TextGray || p == ShaderProgram::TextLcd || p == ShaderProgram::TextLcdGray;
     }
+    // The programs that draw instances (4-vertex strips from the instance data at t7, no vertex buffer): FX shapes and
+    // quads.
+    constexpr bool DrawsInstances(ShaderProgram p)
+    {
+        return p == ShaderProgram::Fx || (p >= ShaderProgram::QuadImage && p <= ShaderProgram::QuadLcdGray);
+    }
+    // The programs with a second color output, for BlendMode::DualSourceLcd (and only they may use it).
+    constexpr bool DualSourceProgram(ShaderProgram p) { return p == ShaderProgram::TextLcd || p == ShaderProgram::QuadLcd; }
 
     enum class VertexLayout : std::uint8_t
     {
@@ -157,7 +172,7 @@ namespace esia::rhi
         Straight,        // rgb: src * srcA + dst * (1 - srcA); a: src + dst * (1 - srcA)
         Premultiplied,   // rgb: src + dst * (1 - srcA);        a: src + dst * (1 - srcA)
         // rgb: src0 * src1 + dst * (1 - src1); a: src1.a + dst * (1 - src1.a) - a second color output (SV_Target1) as
-        // per-channel alpha (Caps::dualSourceBlend; TextLcd only, and TextLcd only with it)
+        // per-channel alpha (Caps::dualSourceBlend; the DualSourceProgram ones only, and they only with it)
         DualSourceLcd,
     };
 

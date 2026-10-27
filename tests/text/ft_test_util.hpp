@@ -23,19 +23,33 @@ namespace esia::texttest
         TextureId texture = 0;
     };
 
-    // the glyph quads of a draw list (AddRectFilledUV: corners 0 and 2 of every 6 indices are min and max)
+    // the glyph quads of a draw list: its instanced quads decoded as the shaders do (QuadInstance), and quads of
+    // geometry (AddRectFilledUV: corners 0 and 2 of every 6 indices are min and max)
     inline std::vector<Quad> Quads(const DrawList& dl)
     {
         std::vector<Quad> out;
         for (const DrawCmd& c : dl.Commands())
         {
-            if (c.kind != DrawCmdKind::Geometry)
-                continue;
-            for (std::uint32_t i = c.first; i + 6 <= c.first + c.count; i += 6)
+            if (c.kind == DrawCmdKind::Quads)
             {
-                const Vertex& a = dl.Vertices()[dl.Indices()[i]];
-                const Vertex& b = dl.Vertices()[dl.Indices()[i + 2]];
-                out.push_back({Rect(a.pos, b.pos), a.uv, b.uv, a.color, c.texture});
+                for (std::uint32_t i = c.first; i < c.first + c.count; ++i)
+                {
+                    const QuadInstance& q = dl.Quads()[i];
+                    const float v0 = std::floor(q.packed[0] / 4096.0f), u0 = q.packed[0] - v0 * 4096.0f;
+                    const float dv = std::floor(q.packed[1] / 4096.0f), du = q.packed[1] - dv * 4096.0f;
+                    const std::uint32_t color = (std::uint32_t)q.packed[2] | ((std::uint32_t)q.packed[3] << 24);
+                    out.push_back({Rect(q.rect[0], q.rect[1], q.rect[2], q.rect[3]), Vec2(u0 / 4096.0f, v0 / 4096.0f),
+                                   Vec2((u0 + du) / 4096.0f, (v0 + dv) / 4096.0f), color, c.texture});
+                }
+            }
+            else if (c.kind == DrawCmdKind::Geometry)
+            {
+                for (std::uint32_t i = c.first; i + 6 <= c.first + c.count; i += 6)
+                {
+                    const Vertex& a = dl.Vertices()[dl.Indices()[i]];
+                    const Vertex& b = dl.Vertices()[dl.Indices()[i + 2]];
+                    out.push_back({Rect(a.pos, b.pos), a.uv, b.uv, a.color, c.texture});
+                }
             }
         }
         return out;

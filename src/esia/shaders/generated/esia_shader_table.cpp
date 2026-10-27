@@ -22,6 +22,14 @@ namespace esia::shaders
         extern const unsigned char spirv_TextLcd_ps_spv[];
         extern const unsigned char spirv_TextLcdGray_vs_spv[];
         extern const unsigned char spirv_TextLcdGray_ps_spv[];
+        extern const unsigned char spirv_QuadImage_vs_spv[];
+        extern const unsigned char spirv_QuadImage_ps_spv[];
+        extern const unsigned char spirv_QuadGray_vs_spv[];
+        extern const unsigned char spirv_QuadGray_ps_spv[];
+        extern const unsigned char spirv_QuadLcd_vs_spv[];
+        extern const unsigned char spirv_QuadLcd_ps_spv[];
+        extern const unsigned char spirv_QuadLcdGray_vs_spv[];
+        extern const unsigned char spirv_QuadLcdGray_ps_spv[];
         extern const unsigned char glsl330_UiGeometry_vs_glsl[];
         extern const unsigned char glsl330_UiGeometry_ps_glsl[];
         extern const unsigned char glsl330_TextGray_vs_glsl[];
@@ -38,6 +46,14 @@ namespace esia::shaders
         extern const unsigned char glsl330_TextLcd_ps_glsl[];
         extern const unsigned char glsl330_TextLcdGray_vs_glsl[];
         extern const unsigned char glsl330_TextLcdGray_ps_glsl[];
+        extern const unsigned char glsl330_QuadImage_vs_glsl[];
+        extern const unsigned char glsl330_QuadImage_ps_glsl[];
+        extern const unsigned char glsl330_QuadGray_vs_glsl[];
+        extern const unsigned char glsl330_QuadGray_ps_glsl[];
+        extern const unsigned char glsl330_QuadLcd_vs_glsl[];
+        extern const unsigned char glsl330_QuadLcd_ps_glsl[];
+        extern const unsigned char glsl330_QuadLcdGray_vs_glsl[];
+        extern const unsigned char glsl330_QuadLcdGray_ps_glsl[];
         extern const unsigned char essl300_UiGeometry_vs_essl[];
         extern const unsigned char essl300_UiGeometry_ps_essl[];
         extern const unsigned char essl300_TextGray_vs_essl[];
@@ -54,6 +70,14 @@ namespace esia::shaders
         extern const unsigned char essl300_TextLcd_ps_essl[];
         extern const unsigned char essl300_TextLcdGray_vs_essl[];
         extern const unsigned char essl300_TextLcdGray_ps_essl[];
+        extern const unsigned char essl300_QuadImage_vs_essl[];
+        extern const unsigned char essl300_QuadImage_ps_essl[];
+        extern const unsigned char essl300_QuadGray_vs_essl[];
+        extern const unsigned char essl300_QuadGray_ps_essl[];
+        extern const unsigned char essl300_QuadLcd_vs_essl[];
+        extern const unsigned char essl300_QuadLcd_ps_essl[];
+        extern const unsigned char essl300_QuadLcdGray_vs_essl[];
+        extern const unsigned char essl300_QuadLcdGray_ps_essl[];
         extern const unsigned char msl_UiGeometry_vs_metal[];
         extern const unsigned char msl_UiGeometry_ps_metal[];
         extern const unsigned char msl_TextGray_vs_metal[];
@@ -70,6 +94,14 @@ namespace esia::shaders
         extern const unsigned char msl_TextLcd_ps_metal[];
         extern const unsigned char msl_TextLcdGray_vs_metal[];
         extern const unsigned char msl_TextLcdGray_ps_metal[];
+        extern const unsigned char msl_QuadImage_vs_metal[];
+        extern const unsigned char msl_QuadImage_ps_metal[];
+        extern const unsigned char msl_QuadGray_vs_metal[];
+        extern const unsigned char msl_QuadGray_ps_metal[];
+        extern const unsigned char msl_QuadLcd_vs_metal[];
+        extern const unsigned char msl_QuadLcd_ps_metal[];
+        extern const unsigned char msl_QuadLcdGray_vs_metal[];
+        extern const unsigned char msl_QuadLcdGray_ps_metal[];
     }
 
     namespace
@@ -82,6 +114,14 @@ namespace esia::shaders
         const TextureBinding kBind_glsl330_LayerComposite_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgPoint", 0, 1}, {"SPIRV_Cross_CombinedgBackdrop0gLinear", 1, 0}, {"SPIRV_Cross_CombinedgBackdrop1gLinear", 2, 0}, {"SPIRV_Cross_CombinedgBackdrop2gLinear", 3, 0}, {"SPIRV_Cross_CombinedgBackdrop3gLinear", 4, 0}, {"SPIRV_Cross_CombinedgBackdrop4gLinear", 5, 0}, {"SPIRV_Cross_CombinedgBackdrop5gLinear", 6, 0}};
         const TextureBinding kBind_glsl330_TextLcd_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_glsl330_TextLcdGray_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
+        const TextureBinding kBind_glsl330_QuadImage_vs_glsl[] = {{"SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler", 7, 1}};
+        const TextureBinding kBind_glsl330_QuadImage_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
+        const TextureBinding kBind_glsl330_QuadGray_vs_glsl[] = {{"SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler", 7, 1}};
+        const TextureBinding kBind_glsl330_QuadGray_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
+        const TextureBinding kBind_glsl330_QuadLcd_vs_glsl[] = {{"SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler", 7, 1}};
+        const TextureBinding kBind_glsl330_QuadLcd_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
+        const TextureBinding kBind_glsl330_QuadLcdGray_vs_glsl[] = {{"SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler", 7, 1}};
+        const TextureBinding kBind_glsl330_QuadLcdGray_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_essl300_UiGeometry_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_essl300_TextGray_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_essl300_Fx_vs_essl[] = {{"SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler", 7, 1}};
@@ -90,6 +130,14 @@ namespace esia::shaders
         const TextureBinding kBind_essl300_LayerComposite_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgPoint", 0, 1}, {"SPIRV_Cross_CombinedgBackdrop0gLinear", 1, 0}, {"SPIRV_Cross_CombinedgBackdrop1gLinear", 2, 0}, {"SPIRV_Cross_CombinedgBackdrop2gLinear", 3, 0}, {"SPIRV_Cross_CombinedgBackdrop3gLinear", 4, 0}, {"SPIRV_Cross_CombinedgBackdrop4gLinear", 5, 0}, {"SPIRV_Cross_CombinedgBackdrop5gLinear", 6, 0}};
         const TextureBinding kBind_essl300_TextLcd_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_essl300_TextLcdGray_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
+        const TextureBinding kBind_essl300_QuadImage_vs_essl[] = {{"SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler", 7, 1}};
+        const TextureBinding kBind_essl300_QuadImage_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
+        const TextureBinding kBind_essl300_QuadGray_vs_essl[] = {{"SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler", 7, 1}};
+        const TextureBinding kBind_essl300_QuadGray_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
+        const TextureBinding kBind_essl300_QuadLcd_vs_essl[] = {{"SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler", 7, 1}};
+        const TextureBinding kBind_essl300_QuadLcd_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
+        const TextureBinding kBind_essl300_QuadLcdGray_vs_essl[] = {{"SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler", 7, 1}};
+        const TextureBinding kBind_essl300_QuadLcdGray_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
     }
 
     // spirv: FX instances in buffer storage
@@ -110,6 +158,14 @@ namespace esia::shaders
         {6, 1, "TextLcdPS", blobs::spirv_TextLcd_ps_spv, 9800, false, nullptr, 0},
         {7, 0, "UiVS", blobs::spirv_TextLcdGray_vs_spv, 1528, false, nullptr, 0},
         {7, 1, "TextLcdGrayPS", blobs::spirv_TextLcdGray_ps_spv, 6260, false, nullptr, 0},
+        {8, 0, "QuadVS", blobs::spirv_QuadImage_vs_spv, 3452, false, nullptr, 0},
+        {8, 1, "UiPS", blobs::spirv_QuadImage_ps_spv, 3612, false, nullptr, 0},
+        {9, 0, "QuadVS", blobs::spirv_QuadGray_vs_spv, 3452, false, nullptr, 0},
+        {9, 1, "TextGrayPS", blobs::spirv_QuadGray_ps_spv, 6252, false, nullptr, 0},
+        {10, 0, "QuadVS", blobs::spirv_QuadLcd_vs_spv, 3452, false, nullptr, 0},
+        {10, 1, "TextLcdPS", blobs::spirv_QuadLcd_ps_spv, 9800, false, nullptr, 0},
+        {11, 0, "QuadVS", blobs::spirv_QuadLcdGray_vs_spv, 3452, false, nullptr, 0},
+        {11, 1, "TextLcdGrayPS", blobs::spirv_QuadLcdGray_ps_spv, 6260, false, nullptr, 0},
         {-1, 0, nullptr, nullptr, 0, false, nullptr, 0},
     };
 
@@ -131,6 +187,14 @@ namespace esia::shaders
         {6, 1, "TextLcdPS", blobs::glsl330_TextLcd_ps_glsl, 5855, true, kBind_glsl330_TextLcd_ps_glsl, 1},
         {7, 0, "UiVS", blobs::glsl330_TextLcdGray_vs_glsl, 455, true, nullptr, 0},
         {7, 1, "TextLcdGrayPS", blobs::glsl330_TextLcdGray_ps_glsl, 3960, true, kBind_glsl330_TextLcdGray_ps_glsl, 1},
+        {8, 0, "QuadVS", blobs::glsl330_QuadImage_vs_glsl, 1576, true, kBind_glsl330_QuadImage_vs_glsl, 1},
+        {8, 1, "UiPS", blobs::glsl330_QuadImage_ps_glsl, 1777, true, kBind_glsl330_QuadImage_ps_glsl, 1},
+        {9, 0, "QuadVS", blobs::glsl330_QuadGray_vs_glsl, 1576, true, kBind_glsl330_QuadGray_vs_glsl, 1},
+        {9, 1, "TextGrayPS", blobs::glsl330_QuadGray_ps_glsl, 3960, true, kBind_glsl330_QuadGray_ps_glsl, 1},
+        {10, 0, "QuadVS", blobs::glsl330_QuadLcd_vs_glsl, 1576, true, kBind_glsl330_QuadLcd_vs_glsl, 1},
+        {10, 1, "TextLcdPS", blobs::glsl330_QuadLcd_ps_glsl, 5855, true, kBind_glsl330_QuadLcd_ps_glsl, 1},
+        {11, 0, "QuadVS", blobs::glsl330_QuadLcdGray_vs_glsl, 1576, true, kBind_glsl330_QuadLcdGray_vs_glsl, 1},
+        {11, 1, "TextLcdGrayPS", blobs::glsl330_QuadLcdGray_ps_glsl, 3960, true, kBind_glsl330_QuadLcdGray_ps_glsl, 1},
         {-1, 0, nullptr, nullptr, 0, false, nullptr, 0},
     };
 
@@ -152,6 +216,14 @@ namespace esia::shaders
         {6, 1, "TextLcdPS", blobs::essl300_TextLcd_ps_essl, 6244, true, kBind_essl300_TextLcd_ps_essl, 1},
         {7, 0, "UiVS", blobs::essl300_TextLcdGray_vs_essl, 458, true, nullptr, 0},
         {7, 1, "TextLcdGrayPS", blobs::essl300_TextLcdGray_ps_essl, 4199, true, kBind_essl300_TextLcdGray_ps_essl, 1},
+        {8, 0, "QuadVS", blobs::essl300_QuadImage_vs_essl, 1585, true, kBind_essl300_QuadImage_vs_essl, 1},
+        {8, 1, "UiPS", blobs::essl300_QuadImage_ps_essl, 1980, true, kBind_essl300_QuadImage_ps_essl, 1},
+        {9, 0, "QuadVS", blobs::essl300_QuadGray_vs_essl, 1585, true, kBind_essl300_QuadGray_vs_essl, 1},
+        {9, 1, "TextGrayPS", blobs::essl300_QuadGray_ps_essl, 4199, true, kBind_essl300_QuadGray_ps_essl, 1},
+        {10, 0, "QuadVS", blobs::essl300_QuadLcd_vs_essl, 1585, true, kBind_essl300_QuadLcd_vs_essl, 1},
+        {10, 1, "TextLcdPS", blobs::essl300_QuadLcd_ps_essl, 6244, true, kBind_essl300_QuadLcd_ps_essl, 1},
+        {11, 0, "QuadVS", blobs::essl300_QuadLcdGray_vs_essl, 1585, true, kBind_essl300_QuadLcdGray_vs_essl, 1},
+        {11, 1, "TextLcdGrayPS", blobs::essl300_QuadLcdGray_ps_essl, 4199, true, kBind_essl300_QuadLcdGray_ps_essl, 1},
         {-1, 0, nullptr, nullptr, 0, false, nullptr, 0},
     };
 
@@ -173,6 +245,14 @@ namespace esia::shaders
         {6, 1, "TextLcdPS", blobs::msl_TextLcd_ps_metal, 7220, true, nullptr, 0},
         {7, 0, "UiVS", blobs::msl_TextLcdGray_vs_metal, 837, true, nullptr, 0},
         {7, 1, "TextLcdGrayPS", blobs::msl_TextLcdGray_ps_metal, 5251, true, nullptr, 0},
+        {8, 0, "QuadVS", blobs::msl_QuadImage_vs_metal, 1890, true, nullptr, 0},
+        {8, 1, "UiPS", blobs::msl_QuadImage_ps_metal, 2016, true, nullptr, 0},
+        {9, 0, "QuadVS", blobs::msl_QuadGray_vs_metal, 1890, true, nullptr, 0},
+        {9, 1, "TextGrayPS", blobs::msl_QuadGray_ps_metal, 5251, true, nullptr, 0},
+        {10, 0, "QuadVS", blobs::msl_QuadLcd_vs_metal, 1890, true, nullptr, 0},
+        {10, 1, "TextLcdPS", blobs::msl_QuadLcd_ps_metal, 7220, true, nullptr, 0},
+        {11, 0, "QuadVS", blobs::msl_QuadLcdGray_vs_metal, 1890, true, nullptr, 0},
+        {11, 1, "TextLcdGrayPS", blobs::msl_QuadLcdGray_ps_metal, 5251, true, nullptr, 0},
         {-1, 0, nullptr, nullptr, 0, false, nullptr, 0},
     };
 

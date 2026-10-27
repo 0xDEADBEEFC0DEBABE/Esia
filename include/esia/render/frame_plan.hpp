@@ -1,7 +1,8 @@
 // Esia - backend-agnostic frame planner (a port of WGT's src/render/frame_plan.*).
 //
 // Walks DrawData once and produces a flat list of render operations plus the frame's merged buffers:
-//   * geometry draws (indices rebased into one index buffer, vertex bounds for dirty tracking),
+//   * geometry draws (indices rebased into one index buffer, vertex bounds for dirty tracking), and draws of
+//     instanced quads (the lists' QuadInstance runs, op by op),
 //   * FX batches: instances sharing clip / texture / effect become ONE instanced draw, split whenever a glass shape
 //     would need to "see" something drawn earlier in the same batch. A draw also joins an earlier batch (FX or
 //     geometry) when everything drawn since touches other pixels: the shapes and the text of a window alternate, and
@@ -62,6 +63,8 @@ namespace esia::render
         // Draw
         std::uint32_t idxCount = 0, idxOffset = 0;   // into FramePlan::indices
         std::uint32_t geometryFirst = 0, geometryCount = 0;   // direct plans: into FramePlan::geometry
+        bool quads = false;          // instanced quads (DrawCmdKind::Quads): quadCount of the frame's quads from quadStart
+        std::uint32_t quadStart = 0, quadCount = 0;
         bool coverage = false;       // glyph coverage texture: a text pipeline
         bool lcd = false;            // ... of sub-pixel coverage (TextureFlags_LcdCoverage): the dual-source one
         // FxBatch
@@ -128,6 +131,16 @@ namespace esia::render
         std::vector<InstanceRun> instanceRuns;
         std::uint32_t totalVertices = 0, totalIndices = 0;
 
+        // The quads of the ops that draw them (RenderOp::quads), op by op, as runs in the draw lists (either plan):
+        // an op's quads are quadCount from its quadStart.
+        struct QuadRun
+        {
+            const QuadInstance* first = nullptr;
+            std::uint32_t count = 0;
+        };
+        std::vector<QuadRun> quadRuns;
+        std::uint32_t quadCount = 0;
+
         bool anyGlass = false;
         bool anyLayer = false;
         int fxCount = 0;
@@ -139,13 +152,14 @@ namespace esia::render
         // Decides before which glass batches the backdrop is captured and over which region (see .cpp).
         void PlanCaptures();
 
-        // Build's scratch: what each op draws, as a chain of runs of instances or indices (see .cpp).
+        // Build's scratch: what each op draws, as a chain of runs of instances, indices or quads (see .cpp).
         struct Piece
         {
             const fx::Instance* inst = nullptr;   // FX batch: `count` instances from here
             const std::uint32_t* idx = nullptr;   // draw: `count` indices from here, rebased by `base`
             std::uint32_t count = 0, base = 0, next = 0;
             std::uint32_t firstIndex = 0;          // draw: where `idx` lands in the frame's index buffer (direct)
+            const QuadInstance* quad = nullptr;   // draw of quads: `count` quads from here
         };
         std::vector<Piece> pieces_;
         std::vector<std::uint32_t> opFirst_, opLast_;

@@ -42,6 +42,10 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**Instanced glyphs and tiles** (2026-10-28, in Esia): glyphs and flat tiles as 32-byte quad instances expanded on the
+GPU (four new programs on every backend); a benchmark of fixed scenes (`esia_bench`). Text: build -43%, upload -69%,
+GPU -60% on Direct3D 11.
+
 **Smooth text motion, legible text** (2026-10-28, in Esia): moving text drawn unhinted at quarter pixels, settling
 into its hinting when it stops; a halo of the other tone where the backdrop comes close to a glyph shape's color.
 
@@ -108,6 +112,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Instanced glyphs and tiles](#instanced-glyphs-and-tiles)
 * [Smooth motion and legible text](#smooth-motion-and-legible-text)
 * [Distance-field text](#distance-field-text)
 * [Sub-pixel text](#sub-pixel-text)
@@ -140,6 +145,66 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Instanced glyphs and tiles
+
+One of the owner's picks (text GPU instancing), and the structural step the plain-widget measurements of 2026-10-07
+pointed at: every glyph was four vertices and six indices written by the CPU (104 bytes), every flat capsule eight
+vertices and eighteen indices.
+
+### What changed
+
+* `DrawList`: quads drawn instanced - `QuadInstance` (two float4 rows: the rect; the uv in 1/4096 and the color as
+  whole numbers, exact in a float), `DrawCmdKind::Quads`, `BeginQuads` / `EndQuads` write them in place, `AddQuad`,
+  `Quads()`, `RefreshBounds` for quads. Mirrored uv are not quads (images stay geometry).
+* The FreeType text system keeps each layout's quads packed (pixel rects from the origin, uv and color packed once)
+  and copies them in with the offset; single glyphs, outlines and icons are quads too. The Painter's flat tiles are
+  their cells as quads (uv packed per tile), the plain middle of a large fill a quad of the white texture; `PopScale`
+  scales quads as it scales vertices.
+* Planner: quads are draws of their own kind (`RenderOp::quads`, joining only draws of quads), kept as runs in the
+  lists (`FramePlan::quadRuns`). Renderer: the quads follow the FX instances in the instance data (`gConv.w`: a row
+  of the buffer; on the instance texture 8 quads in the room of an FX instance, a power of two per row for SM3), and
+  draw with `QuadImage` / `QuadGray` / `QuadLcd` / `QuadLcdGray` (`QuadVS` in `esia_quad.hlsl` with the UI pixel
+  shaders): one instanced draw per batch, no index buffer.
+* RHI: the four programs, `DrawsInstances` and `DualSourceProgram` (the backends' FX-only and TextLcd-only checks:
+  Direct3D 11 / 12 instance-index attribute, Direct3D 9 vertex declaration, Metal planning, the null device).
+  Direct3D 9: the instance texture at most 4096 texels wide - NVIDIA's driver failed the 16384-texel system-memory
+  surface of a full-row upload (E_FAIL) and misbehaved after it.
+* `esia_bench` (`tests/bench`): text, controls (regular and flat), shapes, glass through a headless device of any
+  backend; median and 99th percentile of build, submit and GPU time, what a frame uploads. CTest runs it three frames
+  on the null device.
+
+### Measured (`esia_bench`, Release clang-cl, 1600 x 1000, RTX 4080 SUPER, medians of alternating runs)
+
+| scene | build ms | submit ms | GPU ms | upload KB |
+| --- | --- | --- | --- | --- |
+| text (3418 glyphs), Direct3D 11 | 0.065 -> 0.037 | 0.014 -> 0.007 | 0.027 -> 0.010 | 347 -> 107 |
+| controls (324 capsules, labels), Direct3D 11 | 0.052 -> 0.041 | 0.028 -> 0.024 | 0.047 -> 0.037 | 282 -> 171 |
+| controls flat, Direct3D 11 | 0.100 -> 0.088 | 0.012 -> 0.008 | 0.035 -> 0.020 | 307 -> 110 |
+| text, Direct3D 12 / Vulkan | 0.065 -> 0.039 / 0.066 -> 0.041 | 0.057 -> 0.044 / 0.224 -> 0.201 | 0.028 -> 0.013 / 0.027 -> 0.017 | |
+| text, OpenGL | 0.075 -> 0.044 | 0.251 -> 0.174 | 0.018 -> 0.028 | |
+| text, Direct3D 9 / 10 | 0.078 -> 0.044 / 0.064 -> 0.038 | 0.034 -> 0.064 / 0.031 -> 0.029 | 0.031 -> 0.034 / 0.026 -> 0.018 | |
+
+Shapes and glass are unchanged (FX instances). Where the instance data is a texture (OpenGL, GLES, Direct3D 9 / 10)
+the GPU fetches each quad by texel in the vertex shader: on OpenGL a little more GPU time, on Direct3D 9 more submit
+time (the texture's upload through a system-memory surface), both less than the CPU time saved.
+
+### Verified
+
+* Every conformance scene on D3D9, D3D10, D3D11, D3D12, OpenGL, GLES and Vulkan against the goldens of the vertex
+  path, unchanged (the scenes' glyphs are quads now); the new scene `quad_rows` (the text scene with 16 quads per row
+  of the instance texture, after an FX row) on all of them; the null logs regenerated (one instance buffer, no vertex
+  or index buffers in a frame of text); ctest 37 / 37.
+* Unit tests: quad runs and single quads, the packing, quad bounds and their refresh, scaled quads, text drawn at its
+  final geometry under a scale, flat tiles as quads batching with the text; the FreeType tests decode the quads as the
+  shader does (golden images unchanged).
+
+### Not done
+
+* Instance-rate vertex attributes would spare the texture-storage backends their texel fetches (two rows a quad fit
+  in attributes, unlike the 24 of an FX instance).
+* Images are still geometry (any uv, mirrored, any texture size); FX instances still take 384 bytes each (the shapes
+  scene uploads 3.75 MB for 10000 of them: the next structural step for shape-heavy frames).
 
 ## Smooth motion and legible text
 

@@ -85,6 +85,7 @@ namespace esia::render
         std::size_t vbCap = 0, ibCap = 0, fxCap = 0;
         rhi::Texture fxTex;
         int fxTexW = 0, fxTexH = 0, fxPerRow = 1;
+        float quadStart = 0.0f;   // where the quads start in the instance data (gConv.w): a row of the buffer or texture
         std::vector<float> staging;
 
         // size-dependent surfaces
@@ -299,9 +300,19 @@ namespace esia::render
                 }
         }
 
-        // Vertex, index and FX instance data, once per frame before the first pass. A direct plan's (a device with
-        // Caps::baseVertex) go from the draw lists into the mapped buffers: each list's vertices and indices as
-        // they are, at its offsets.
+        // The plan's quads, in op order, into `dst` (`plan.quadCount` of them)
+        void WriteQuads(unsigned char* dst) const
+        {
+            for (const FramePlan::QuadRun& r : plan.quadRuns)
+            {
+                std::memcpy(dst, r.first, (std::size_t)r.count * sizeof(QuadInstance));
+                dst += (std::size_t)r.count * sizeof(QuadInstance);
+            }
+        }
+
+        // Vertex, index and instance data (FX instances, then quads), once per frame before the first pass. A direct
+        // plan's (a device with Caps::baseVertex) go from the draw lists into the mapped buffers: each list's vertices
+        // and indices as they are, at its offsets.
         bool Upload(int maxPerRow)
         {
             const std::size_t vcount = plan.direct ? plan.totalVertices : plan.vertices.size();
@@ -340,30 +351,44 @@ namespace esia::render
                         dev.UpdateBuffer(ib, plan.indices.data(), ibytes);
                 }
             }
-            const std::size_t n = (std::size_t)plan.fxCount;
-            if (n == 0)
+            const std::size_t n = (std::size_t)plan.fxCount, nq = (std::size_t)plan.quadCount;
+            quadStart = 0.0f;
+            if (n == 0 && nq == 0)
                 return true;
             const bool texture = caps.fxStorage == rhi::FxStorage::Texture;
             fxPerRow = texture ? std::max(1, caps.maxFxDataWidth / (int)fx::kInstanceVec4Count) : 1;
             if (texture && maxPerRow > 0)
                 fxPerRow = std::min(fxPerRow, maxPerRow);
-            const std::size_t rows = texture ? (n + (std::size_t)fxPerRow - 1) / (std::size_t)fxPerRow : 1;
             if (!texture)
             {
-                // written in place: one copy from the draw lists (or the plan) to the GPU
-                const std::size_t bytes = n * sizeof(fx::Instance);
+                // written in place: one copy from the draw lists (or the plan) to the GPU, the quads after the FX
+                // instances
+                const std::size_t fxBytes = n * sizeof(fx::Instance), bytes = fxBytes + nq * sizeof(QuadInstance);
                 if (!EnsureBuffer(fxBuf, fxCap, bytes, rhi::BufferKind::FxInstances, "fx-instances"))
                     return false;
-                auto* dst = static_cast<float*>(dev.MapBuffer(fxBuf, bytes));
+                auto* dst = static_cast<unsigned char*>(dev.MapBuffer(fxBuf, bytes));
                 if (!dst)
                     return false;
-                WriteInstances(dst);
+                WriteInstances(reinterpret_cast<float*>(dst));
+                WriteQuads(dst + fxBytes);
                 dev.UnmapBuffer(fxBuf);
+                quadStart = (float)(n * fx::kInstanceVec4Count);
                 return true;
             }
-            staging.resize(n * fx::kInstanceVec4Count * 4);
+            // The texture: fxPerRow FX instances to a row (24 texels each), then the quads from the next row on, 8 in
+            // the room of an FX instance - 16 of its 24 texels, so that a row holds a power of two of them (SM3 finds
+            // a quad's row with a float modulo, exact only then; esia_quad.hlsl)
+            const std::size_t perRow = (std::size_t)fxPerRow, quadsPerRow = perRow * 8;
+            const std::size_t fxRows = (n + perRow - 1) / perRow, quadRows = (nq + quadsPerRow - 1) / quadsPerRow;
+            const int w = fxPerRow * (int)fx::kInstanceVec4Count, h = (int)(fxRows + quadRows);
+            const std::size_t rowFloats = (std::size_t)w * 4;
+            staging.resize((std::size_t)h * rowFloats);
             WriteInstances(staging.data());
-            const int w = fxPerRow * (int)fx::kInstanceVec4Count, h = (int)rows;
+            std::size_t q = 0;
+            for (const FramePlan::QuadRun& r : plan.quadRuns)
+                for (std::uint32_t i = 0; i < r.count; ++i, ++q)
+                    std::memcpy(staging.data() + (fxRows + q / quadsPerRow) * rowFloats + (q % quadsPerRow) * 8, &r.first[i], sizeof(QuadInstance));
+            quadStart = (float)fxRows;
             if (!fxTex || fxTexW != w || fxTexH < h)
             {
                 Release(fxTex);
@@ -376,13 +401,12 @@ namespace esia::render
                 if (!fxTex)
                     return false;
             }
-            // the full rows, then the used part of the last one: the texels past the last instance are never read
+            // the full rows, then the used part of the last one: the texels past the last instance or quad are never read
             const int rowPitch = w * (int)sizeof(float) * 4;
             if (h > 1)
                 dev.UpdateTexture(fxTex, rhi::IRect{0, 0, w, h - 1}, staging.data(), rowPitch);
-            const std::size_t last = n - (std::size_t)(h - 1) * (std::size_t)fxPerRow;
-            dev.UpdateTexture(fxTex, rhi::IRect{0, h - 1, (int)(last * fx::kInstanceVec4Count), h},
-                              staging.data() + (std::size_t)(h - 1) * (std::size_t)fxPerRow * fx::kInstanceVec4Count * 4, rowPitch);
+            const std::size_t used = nq > 0 ? (nq - (quadRows - 1) * quadsPerRow) * 2 : (n - (fxRows - 1) * perRow) * fx::kInstanceVec4Count;
+            dev.UpdateTexture(fxTex, rhi::IRect{0, h - 1, (int)used, h}, staging.data() + (std::size_t)(h - 1) * rowFloats, rowPitch);
             return true;
         }
 
@@ -428,7 +452,7 @@ namespace esia::render
             fc.conv[0] = caps.framebufferOriginBottomLeft ? 1.0f : 0.0f;
             fc.conv[1] = caps.halfPixelOffset ? 0.5f : 0.0f;
             fc.conv[2] = caps.fxStorage == rhi::FxStorage::Texture ? (float)fxPerRow : 0.0f;
-            fc.conv[3] = 0.0f;
+            fc.conv[3] = quadStart;
             frameLayer = fc;
             frameLayer.time[3] = 0.0f;   // layers are composed in gamma space and converted on composite
         }
@@ -521,7 +545,7 @@ namespace esia::render
             rhi::PipelineDesc d;
             d.program = program;
             d.layout = rhi::UsesUiVertices(program) ? rhi::VertexLayout::UiVertex : rhi::VertexLayout::None;
-            d.topology = program == rhi::ShaderProgram::Fx ? rhi::Topology::TriangleStrip : rhi::Topology::TriangleList;
+            d.topology = rhi::DrawsInstances(program) ? rhi::Topology::TriangleStrip : rhi::Topology::TriangleList;
             d.blend = blend;
             d.targetFormat = passFormat;
             d.samples = passSamples;
@@ -774,27 +798,55 @@ namespace esia::render
             }
         }
 
+        // t7: the frame's instance data (FX instances, then quads)
+        void BindInstanceData()
+        {
+            if (!fxDataBound)
+            {
+                if (caps.fxStorage == rhi::FxStorage::Buffer)
+                    dev.SetFxBuffer(fxBuf);
+                else
+                    BindTexture(rhi::kSlotFxData, fxTex);
+                fxDataBound = true;
+            }
+        }
+
         // ------------------------------------------------------------ ops
         void DrawGeometry(const RenderOp& op)
         {
             ProfileRun(RunGeometry);
             EnsureContentPass();
+            // the program of the texture's kind, of vertices or of instanced quads
+            const bool q = op.quads;
             rhi::Pipeline pipeline;
             if (op.lcd)
             {
                 // sub-pixel pages: per-channel alpha on an opaque target; inside glow layers (alpha targets), on targets
                 // that are not opaque and without dual-source blending, the grayscale coverage kept in A
                 if (caps.dualSourceBlend && subpixelText && !(layerDepth > 0 && layer))
-                    pipeline = GetPipeline(rhi::ShaderProgram::TextLcd, rhi::BlendMode::DualSourceLcd);
+                    pipeline = GetPipeline(q ? rhi::ShaderProgram::QuadLcd : rhi::ShaderProgram::TextLcd, rhi::BlendMode::DualSourceLcd);
                 if (!pipeline)
-                    pipeline = GetPipeline(rhi::ShaderProgram::TextLcdGray, rhi::BlendMode::Straight);
+                    pipeline = GetPipeline(q ? rhi::ShaderProgram::QuadLcdGray : rhi::ShaderProgram::TextLcdGray, rhi::BlendMode::Straight);
             }
+            else if (op.coverage)
+                pipeline = GetPipeline(q ? rhi::ShaderProgram::QuadGray : rhi::ShaderProgram::TextGray, rhi::BlendMode::Straight);
             else
-                pipeline = GetPipeline(op.coverage ? rhi::ShaderProgram::TextGray : rhi::ShaderProgram::UiGeometry, rhi::BlendMode::Straight);
+                pipeline = GetPipeline(q ? rhi::ShaderProgram::QuadImage : rhi::ShaderProgram::UiGeometry, rhi::BlendMode::Straight);
             if (!BindPipeline(pipeline) || !SetScissor(op.clip))
                 return;
             EnsureFrame();
             BindTexture(rhi::kSlotTexture, TextureOf(op.texture));
+            if (q)
+            {
+                BindInstanceData();
+                BindDraw(op.fade, caps.drawFirstInstance ? 0u : op.quadStart);
+                if (caps.drawFirstInstance)
+                    dev.DrawInstancedFrom(4, op.quadCount, op.quadStart);
+                else
+                    dev.DrawInstanced(4, op.quadCount);
+                ++stats.drawCalls;
+                return;
+            }
             BindDraw(op.fade, 0);
             if (!geometryBound)
             {
@@ -844,14 +896,7 @@ namespace esia::render
             EnsureFrame();
             BindTexture(rhi::kSlotTexture, TextureOf(op.texture));
             BindBackdrop();
-            if (!fxDataBound)
-            {
-                if (caps.fxStorage == rhi::FxStorage::Buffer)
-                    dev.SetFxBuffer(fxBuf);
-                else
-                    BindTexture(rhi::kSlotFxData, fxTex);
-                fxDataBound = true;
-            }
+            BindInstanceData();
             // the first instance in the draw where the device takes it there: the Draw constants then stay as they were
             BindDraw(op.fade, caps.drawFirstInstance ? 0u : op.instStart);
             if (!warmUp.empty() && passFormat == targetDesc.format && passSamples == targetDesc.samples && WarmUp(op))
@@ -995,6 +1040,7 @@ namespace esia::render
             stats.fxInstances = plan.fxCount;
             stats.vertices = (int)plan.totalVertices;
             stats.indices = (int)plan.totalIndices;
+            stats.quads = (int)plan.quadCount;
 
             const bool glass = plan.anyGlass && (canCopy || canRead);
             const bool surfaces = (glass || plan.anyLayer) && EnsureSurfaces(glass && canCopy, plan.anyLayer);

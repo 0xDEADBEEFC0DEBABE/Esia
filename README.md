@@ -42,7 +42,7 @@ EsiaGUI is this repository with the widget layer added: it shares Esia's history
 | Part | State |
 | --- | --- |
 | UI core (`src/esia/core`) | ([UI_CORE.md](docs/UI_CORE.md)) ids, input (touch included), windows with per-window DPI, front-to-back hit testing, press and key ownership, containers and layout providers, child scroll regions, popups and tooltips, per-id state, draw lists, texture registry, debug checks for mistakes in UI code |
-| Renderer (`src/esia/render`) | the Painter (rectangles, capsules, circles, lines, polylines, arcs, rings, sectors and areas as signed-distance shapes, shadows, inner and outer glow, images, icons, text, masks, scales, glow layers, edge fades), the frame planner, liquid glass (backdrop captures, blur pyramid, refraction, dispersion), glow layers, edge fades, custom HLSL effects on Direct3D, GPU profiling |
+| Renderer (`src/esia/render`) | the Painter (rectangles, capsules, circles, lines, polylines, arcs, rings, sectors and areas as signed-distance shapes, shadows, inner and outer glow, images, icons, text, masks, scales, glow layers, edge fades), the frame planner, glyphs and flat tiles as instanced quads (32 bytes each, expanded on the GPU), liquid glass (backdrop captures, blur pyramid, refraction, dispersion), glow layers, edge fades, custom HLSL effects on Direct3D, GPU profiling |
 | Text (`src/esia/text`) | analytic glyph rasterizer, glyph atlas, FreeType + HarfBuzz text system (bundled or the system's) with FreeType's rendering to choose from (hinting: light, the fonts' own with the v35 or v40 interpreter, the autohinter; its rasterizer, stem darkening, whole-pixel advances), sub-pixel (LCD) antialiasing from either rasterizer (dual-source blending on every backend but Direct3D 9, following the window's monitor on Windows), multi-channel distance fields (MTSDF, made by Esia: overlapping contours resolved, sharp corners at any scale) for large and transformed text and for text with any Painter material - outlines, glows, shadows, gradients, glass, weight - in one draw, hinted text that moves smoothly (drawn unhinted at quarter pixels while it moves, settling into its hinting when it stops), a halo that keeps text legible where the backdrop comes close to its color, system font lookup with fallback chains for every major script, color emoji from bitmap strikes (sbix, CBDT) and COLR fonts (gradients, transforms, composite modes), text outlines (glyphs grown by exact distance), bitmap fonts (BDF, PCF, Windows FNT / FON, pixel for pixel) |
 | Backends (`src/esia/rhi/<name>`) | DirectX (Direct3D 9 / 10 / 11 / 12, in `rhi/directx`), OpenGL 3.3 / OpenGL ES 3.0, Vulkan 1.1+, Metal; and `rhi/null`, a device without a GPU that records the command stream and checks the call rules |
 | Platform | layers as libraries for Win32 (`src/esia/platform/win32`, [PLATFORM_WIN32.md](docs/PLATFORM_WIN32.md)), X11 (`src/esia/platform/x11`) and Android (`src/esia/platform/android`); the example's own frames on AppKit (macOS) and UIKit (iOS) |
@@ -100,6 +100,10 @@ The commands and what to install are in each system's section: [Windows](#window
   that build them: `windows-msvc` (a Debug build: `cmake --build --preset windows-msvc-debug` first),
   `windows-clang-cl`, `linux-clang`, `linux-clang-release` and `macos-clang`. `ios`, `ios-simulator`, `android` and
   `windows-cross` build no tests.
+* Benchmark: `esia_bench` (with the tests, `tests/bench/esia_bench.cpp`) draws fixed scenes - a page of Latin and
+  Chinese text, a grid of controls (regular and flat), ten thousand shapes, twenty glass panels - through a headless
+  device of any backend and prints each frame's build, submit and GPU time (median and 99th percentile) and what it
+  uploads: `esia_bench --backend d3d11 --scene all`. Compare builds by alternating their runs on one machine.
 
 ## Using it in your project
 
@@ -351,8 +355,8 @@ the commit for `main` and delete the branch.
 
 ## Roadmap
 
-1. Text: glyph instancing; then the bidi algorithm, variable-font instances (SF's weights), fallback per language
-   and fallback fonts loaded when first needed.
+1. Text: the bidi algorithm, variable-font instances (SF's weights), fallback per language and fallback fonts
+   loaded when first needed.
 2. Platform layers: Cocoa and UIKit as libraries (the example's AppKit and UIKit frames are the start), then Wayland,
    SDL, and inline IME composition on Linux and Android.
 3. Performance: fewer render-pass breaks per backdrop capture on tile-based GPUs; FX feature variants on Vulkan and

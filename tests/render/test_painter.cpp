@@ -10,7 +10,7 @@ using namespace esia;
 
 namespace
 {
-    // Text stand-in: every character is a 6 x 10 quad on texture 42.
+    // Text stand-in: every character is a 6 x 10 quad on texture 42 (an instanced quad, as glyphs are).
     struct FakeText final : text::TextSystem
     {
         float lastScale = 0.0f;
@@ -58,10 +58,8 @@ namespace
             calls += 't';
             lastScale = scale;
             lastPos = pos;
-            dl.PushTexture(42);
             for (std::size_t i = 0; i < s.size(); ++i)
-                dl.AddRectFilled(Rect::FromSize(pos + Vec2(6.0f * scale * (float)i, 0), Vec2(6, 10) * scale), c.ToRgba8());
-            dl.PopTexture();
+                dl.AddQuad(42, Rect::FromSize(pos + Vec2(6.0f * scale * (float)i, 0), Vec2(6, 10) * scale), Vec2(0, 0), Vec2(1, 1), c.ToRgba8());
             return Measure(f, s, 0, 0).size;
         }
         void DrawGlyph(DrawList& dl, text::FontRef f, char32_t, Vec2 center, Color c) override
@@ -175,6 +173,7 @@ ESIA_TEST(Painter, MasksAndScale)
     p.PushScale(Vec2(50, 50), 0.5f);
     p.Rect(Rect(0, 0, 100, 100), Style().Fill(Color::White()).Radius(20).Glow(Color::White(), 10));
     dl.AddRectFilled(Rect(0, 0, 100, 100), 0xFFFFFFFFu);
+    dl.AddQuad(7, Rect(0, 0, 100, 100), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
     p.PopScale();
     p.PopMask();
     p.Rect(Rect(0, 0, 10, 10), Style().Fill(Color::White()));
@@ -182,8 +181,11 @@ ESIA_TEST(Painter, MasksAndScale)
     ESIA_CHECK((i.flags[0] & fx::kMask) && i.mask[2] == 100 && i.maskParams[0] == 12);
     ESIA_CHECK(i.rect[0] == 25 && i.rect[2] == 75 && i.radii[0] == 10 && i.glowParams[0] == 5);
     ESIA_CHECK(!(dl.FxInstances()[1].flags[0] & fx::kMask));
-    // geometry drawn under the scale is scaled at PopScale
+    // geometry and quads drawn under the scale are scaled at PopScale
     ESIA_CHECK(dl.Vertices()[0].pos == Vec2(25, 25) && dl.Vertices()[2].pos == Vec2(75, 75));
+    const QuadInstance& q = dl.Quads()[0];
+    ESIA_CHECK(q.rect[0] == 25 && q.rect[1] == 25 && q.rect[2] == 75 && q.rect[3] == 75);
+    ESIA_CHECK(dl.Commands()[2].kind == DrawCmdKind::Quads && dl.Commands()[2].vtxBounds == Rect(25, 25, 75, 75));
 }
 
 ESIA_TEST(Painter, TextUnderScaleIsRasterizedScaledNotStretched)
@@ -199,7 +201,8 @@ ESIA_TEST(Painter, TextUnderScaleIsRasterizedScaledNotStretched)
     ESIA_CHECK(text.lastScale == 2.0f && text.lastPos == Vec2(20, 20));
     ESIA_CHECK(size == Vec2(12, 10));   // the layout size, unscaled
     // the glyph quads keep their final geometry: PopScale skips them
-    ESIA_CHECK(dl.Vertices()[0].pos == Vec2(20, 20) && dl.Vertices()[2].pos == Vec2(32, 40));
+    const QuadInstance& q = dl.Quads()[0];
+    ESIA_CHECK(q.rect[0] == 20 && q.rect[1] == 20 && q.rect[2] == 32 && q.rect[3] == 40);
     ESIA_CHECK(dl.Commands().back().texture == 42);
 
     const Vec2 box = p.TextBox(Rect(0, 100, 100, 140), Vec2(0.5f, 0.5f), text::FontRef{1, 10}, Color::White(), "abcd");
@@ -407,17 +410,19 @@ namespace
         std::uint64_t TileGeneration() override { return generation; }
     };
 
-    int GeometryCommands(const DrawList& dl, TextureId texture)
+    int QuadCommands(const DrawList& dl, TextureId texture)
     {
         int n = 0;
         for (const DrawCmd& c : dl.Commands())
-            n += c.kind == DrawCmdKind::Geometry && c.count > 0 && c.texture == texture ? 1 : 0;
+            n += c.kind == DrawCmdKind::Quads && c.count > 0 && c.texture == texture ? 1 : 0;
         return n;
     }
+
+    std::uint32_t QuadColor(const QuadInstance& q) { return (std::uint32_t)q.packed[2] | ((std::uint32_t)q.packed[3] << 24); }
 }
 
-// Flat drawing: rounded rectangles, capsules and circles are geometry on the text's texture - one command with the
-// text around them - from coverage tiles made once per kind of shape; no shadows; glass a solid surface
+// Flat drawing: rounded rectangles, capsules and circles are quads on the text's texture - one command with the text
+// around them - from coverage tiles made once per kind of shape; no shadows; glass a solid surface
 ESIA_TEST(Painter, FlatShapesAreGeometryThatBatchesWithText)
 {
     TileText tt;
@@ -434,16 +439,16 @@ ESIA_TEST(Painter, FlatShapesAreGeometryThatBatchesWithText)
     p.Capsule(Rect(80, 60, 160, 96), Style().Fill(Color::Hex(0x0A84FF)));   // the same shape elsewhere: the same tile
     p.Circle(Vec2(200, 20), 10, Style().Fill(Color::White()));
     ESIA_CHECK(dl.FxInstances().empty());
-    ESIA_CHECK(GeometryCommands(dl, 42) == 1);   // the text and the shapes: one command
-    ESIA_CHECK(tt.added == 2);                  // the button's tile and the circle's
+    ESIA_CHECK(QuadCommands(dl, 42) == 1 && dl.Vertices().empty());   // the text and the shapes: one command
+    ESIA_CHECK(tt.added == 2);                                       // the button's tile and the circle's
     // a capsule 80 x 36: stretched along x (3 cells), whole along y; a circle: one quad
-    ESIA_CHECK(dl.Vertices().size() == (std::size_t)(5 * 4 + 8 + 2 * 4 + 8 + 4));
+    ESIA_CHECK(dl.Quads().size() == (std::size_t)(5 + 3 + 2 + 3 + 1));
 
     // a large fill: its middle from the white texture, the rim from the tile; a stroke's ring around it
     DrawList d2 = MakeList();
     Painter q(d2, env);
     q.Rect(Rect(10, 10, 310, 210), Style().Radius(20).Fill(Color(0.2f, 0.2f, 0.2f, 1)).Stroke(1.0f, Color::White(0.3f)));
-    ESIA_CHECK(d2.FxInstances().empty() && GeometryCommands(d2, 0) == 1 && GeometryCommands(d2, 42) >= 1);
+    ESIA_CHECK(d2.FxInstances().empty() && QuadCommands(d2, 0) == 1 && QuadCommands(d2, 42) >= 1);
     ESIA_CHECK(tt.added == 4);
 
     // what geometry cannot do stays an FX shape, without the shadow and glow flat drawing leaves out
@@ -458,9 +463,9 @@ ESIA_TEST(Painter, FlatShapesAreGeometryThatBatchesWithText)
     GlassMaterial m;
     m.tint = Color(1, 1, 1, 0.5f);
     g.Rect(Rect(10, 10, 60, 60), Style().Radius(8).Glass(m));
-    ESIA_CHECK(d4.FxInstances().empty() && !d4.Vertices().empty());
-    if (!d4.Vertices().empty())
-        ESIA_CHECK(d4.Vertices()[0].color == Color(0.55f, 0.55f, 0.55f, 1.0f).ToRgba8());
+    ESIA_CHECK(d4.FxInstances().empty() && !d4.Quads().empty());
+    if (!d4.Quads().empty())
+        ESIA_CHECK(QuadColor(d4.Quads()[0]) == Color(0.55f, 0.55f, 0.55f, 1.0f).ToRgba8());
 
     // the tiles are gone when the text system starts its pages over: made again
     ++tt.generation;

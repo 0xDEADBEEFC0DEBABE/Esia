@@ -519,13 +519,13 @@ namespace esia::rhi::d3d11
 
         Pipeline CreatePipeline(const PipelineDesc& desc) override
         {
-            if (desc.program >= ShaderProgram::Count || (desc.blend == BlendMode::DualSourceLcd) != (desc.program == ShaderProgram::TextLcd))
+            if (desc.program >= ShaderProgram::Count || (desc.blend == BlendMode::DualSourceLcd) != DualSourceProgram(desc.program))
                 return {};
             d3d::ShaderRequest vr;
             vr.program = desc.program;
             vr.stage = shaders::Stage::Vertex;
             vr.model = d3d::ShaderModel::Sm5;
-            vr.instanceAttribute = desc.program == ShaderProgram::Fx;   // Caps::drawFirstInstance
+            vr.instanceAttribute = DrawsInstances(desc.program);   // Caps::drawFirstInstance
             d3d::ShaderRequest pr = vr;
             pr.stage = shaders::Stage::Pixel;
             d3d::Bytecode ps;
@@ -566,11 +566,11 @@ namespace esia::rhi::d3d11
                 }
                 p.layout = uiLayout_;
             }
-            else if (desc.program == ShaderProgram::Fx)
+            else if (DrawsInstances(desc.program))
             {
                 if (!fxLayout_)
                 {
-                    // the instance's index, from InstanceIndices at slot 1 (every FX vertex shader has this input)
+                    // the instance's index, from InstanceIndices at slot 1 (every FX and quad vertex shader has this input)
                     const D3D11_INPUT_ELEMENT_DESC e = {"INSTANCEINDEX", 0, DXGI_FORMAT_R32_UINT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1};
                     if (!log_.Check(dev_->CreateInputLayout(&e, 1, vs->data(), vs->size(), &fxLayout_), "CreateInputLayout (fx)"))
                         return {};

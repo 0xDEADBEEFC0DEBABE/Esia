@@ -281,7 +281,7 @@ namespace esia
         bool FlatShape(const esia::Rect& bounds, Color fill, Color stroke, float strokeWidth, float strokeAlign, const float* shapeRadii,
                        float smoothing);
         void ApplyScale(fx::Instance& inst) const;
-        void ExcludeFromScale(std::size_t vtxStart);
+        void ExcludeFromScale(std::size_t vtxStart, std::size_t quadStart);
         float Pixel() const { return env_.pixelScale > 0.0f ? env_.pixelScale : 1.0f; }
 
         // A stack read only below its depth: not initialized (a Painter is made for every widget; zeroing these
@@ -307,13 +307,13 @@ namespace esia
         int scaleDepth_ = 0;
         Stack<Vec2, 8> scaleOrigin_;
         Stack<float, 8> scaleValue_;
-        Stack<std::size_t, 8> scaleVtxStart_;
+        Stack<std::size_t, 8> scaleVtxStart_, scaleQuadStart_;
         float mergeRadius_ = 0.0f;
         float mergeSmooth_ = -1.0f;
         std::uint64_t tileGeneration_ = 0;   // flat drawing: env_.text->TileGeneration(), asked once (0: not yet)
-        // vertex ranges drawn at their final scaled geometry (text / icons): PopScale leaves them alone
+        // vertex and quad ranges drawn at their final scaled geometry (text / icons): PopScale leaves them alone
         static constexpr int kMaxExcluded = 64;
-        Stack<std::size_t, kMaxExcluded> excludedStart_, excludedEnd_;
+        Stack<std::size_t, kMaxExcluded> excludedStart_, excludedEnd_, excludedQuadStart_, excludedQuadEnd_;
         int excludedCount_ = 0;
     };
 }

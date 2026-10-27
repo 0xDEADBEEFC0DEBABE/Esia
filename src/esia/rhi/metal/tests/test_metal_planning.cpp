@@ -25,15 +25,15 @@ ESIA_TEST(MetalPlanning, PipelineKeys)
                     PipelineDesc d;
                     d.program = (ShaderProgram)p;
                     d.layout = ProgramUsesVertices(d.program) ? VertexLayout::UiVertex : VertexLayout::None;
-                    d.topology = d.program == ShaderProgram::Fx ? Topology::TriangleStrip : Topology::TriangleList;
+                    d.topology = DrawsInstances(d.program) ? Topology::TriangleStrip : Topology::TriangleList;
                     d.blend = b;
                     d.targetFormat = f;
                     d.samples = s;
                     PipelineKey k;
                     std::string why;
                     const bool ok = MakePipelineKey(d, caps, k, why);
-                    // dual-source blending belongs to TextLcd and TextLcd needs it
-                    ESIA_CHECK(ok == ((d.program == ShaderProgram::TextLcd) == (b == BlendMode::DualSourceLcd)));
+                    // dual-source blending belongs to TextLcd and QuadLcd, and they need it
+                    ESIA_CHECK(ok == (DualSourceProgram(d.program) == (b == BlendMode::DualSourceLcd)));
                     if (!ok)
                         continue;
                     ++n;

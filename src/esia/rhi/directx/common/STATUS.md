@@ -197,6 +197,12 @@ off (4096 instruction slots). On the RTX 4080 SUPER `text_fields` passes on D3D9
 on D3D10 / 11 / 12. Their legibility halo (`fx::kLegible`) is left out of SM3's full shader too; `text_legible` passes
 on all four to the pixel.
 
+Instanced quads (glyphs, flat tiles: `QuadVS`, the instance data after the FX instances) run on all four. On D3D9 the
+instance texture is now at most 4096 texels wide: with quads after an FX row the renderer uploaded a full row of
+12288 texels, whose 16384-texel system-memory surface NVIDIA's driver refused (E_FAIL), and the device then failed
+`CreateVertexShader` of valid bytecode. Text costs D3D9 more submit time than the vertices did (the texture upload),
+less build time.
+
 ### Sub-pixel text back (2026-10-28)
 
 The owner asked for sub-pixel text again: the D3D10 / 11 / 12 `DualSourceLcd` blend states (`SRC1_COLOR` /

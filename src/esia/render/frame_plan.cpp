@@ -202,6 +202,8 @@ namespace esia::render
         lists.clear();
         geometry.clear();
         instanceRuns.clear();
+        quadRuns.clear();
+        quadCount = 0;
         direct = directGeometry;
         totalVertices = totalIndices = 0;
         pieces_.clear();
@@ -237,7 +239,7 @@ namespace esia::render
             if (last != kNoPiece)
             {
                 Piece& l = pieces_[last];   // continues the op's last piece: consecutive instances or indices of a list
-                if ((piece.inst && l.inst && l.inst + l.count == piece.inst) ||
+                if ((piece.inst && l.inst && l.inst + l.count == piece.inst) || (piece.quad && l.quad && l.quad + l.count == piece.quad) ||
                     (piece.idx && l.idx && l.idx + l.count == piece.idx && l.base == piece.base))
                 {
                     l.count += piece.count;
@@ -478,6 +480,54 @@ namespace esia::render
                     barrier = (int)ops.size();
                     break;
                 }
+                case DrawCmdKind::Quads:
+                {
+                    // as geometry, drawn instanced: they join draws of quads only
+                    if (cmd.count == 0 || clip.Empty())
+                        break;
+                    RenderOp o;
+                    o.type = RenderOp::Draw;
+                    o.quads = true;
+                    o.clip = clip;
+                    std::copy(fade, fade + 4, o.fade);
+                    o.texture = cmd.texture;
+                    TextureInfo ti;
+                    if (cmd.texture != 0 && textureInfo && textureInfo(cmd.texture, ti))
+                    {
+                        o.coverage = ti.Coverage();
+                        o.lcd = ti.Lcd();
+                    }
+                    o.quadCount = cmd.count;
+                    const PxRect whole = map(cmd.vtxBounds).Expand(1.0f);
+                    const bool cut = !clip.Contains(whole);
+                    o.bounds = whole.Intersect(clip);
+                    if (o.bounds.Empty())
+                        break;   // nothing inside the clip
+                    o.clipFree = !cut;
+                    int k = findJoin(o.bounds, false, [&](const RenderOp& x) {
+                        return x.type == RenderOp::Draw && x.quads && clipJoins(x, clip, whole, cut) && x.texture == cmd.texture &&
+                               x.coverage == o.coverage && std::equal(fade, fade + 4, x.fade);
+                    });
+                    if (k >= 0)
+                    {
+                        joinClip(ops[(std::size_t)k], clip, cut);
+                        ops[(std::size_t)k].quadCount += cmd.count;
+                        ops[(std::size_t)k].bounds = ops[(std::size_t)k].bounds.Union(o.bounds);
+                    }
+                    else
+                    {
+                        ops.push_back(o);
+                        k = (int)ops.size() - 1;
+                    }
+                    Piece pc;
+                    pc.quad = dl->Quads().data() + cmd.first;
+                    pc.count = cmd.count;
+                    pc.next = kNoPiece;
+                    link(k, pc);
+                    touch(k, o.bounds);
+                    addToLayers(o.bounds);
+                    break;
+                }
                 case DrawCmdKind::Geometry:
                 {
                     if (cmd.count == 0 || clip.Empty())
@@ -501,7 +551,7 @@ namespace esia::render
                         break;   // nothing inside the clip
                     o.clipFree = !cut;
                     int k = findJoin(o.bounds, false, [&](const RenderOp& x) {
-                        return x.type == RenderOp::Draw && clipJoins(x, clip, whole, cut) && x.texture == cmd.texture && x.coverage == o.coverage &&
+                        return x.type == RenderOp::Draw && !x.quads && clipJoins(x, clip, whole, cut) && x.texture == cmd.texture && x.coverage == o.coverage &&
                                std::equal(fade, fade + 4, x.fade);
                     });
                     if (k >= 0)
@@ -543,6 +593,21 @@ namespace esia::render
             // it when that does (no scissor change), else the whole target.
             if (o.clipFree)
                 o.clip = k > 0 && ops[k - 1].clip.Contains(o.bounds.Intersect(screen)) ? ops[k - 1].clip : screen;
+            if (o.type == RenderOp::Draw && o.quads)
+            {
+                // the quads stay in the lists, as runs (the renderer copies them to the GPU once)
+                o.quadStart = quadCount;
+                for (std::uint32_t p = opFirst_[k]; p != kNoPiece; p = pieces_[p].next)
+                {
+                    const Piece& pc = pieces_[p];
+                    if (!quadRuns.empty() && quadRuns.back().first + quadRuns.back().count == pc.quad)
+                        quadRuns.back().count += pc.count;
+                    else
+                        quadRuns.push_back({pc.quad, pc.count});
+                    quadCount += pc.count;
+                }
+                continue;
+            }
             if (direct)
             {
                 // the instances as runs, the draws at their lists' offsets

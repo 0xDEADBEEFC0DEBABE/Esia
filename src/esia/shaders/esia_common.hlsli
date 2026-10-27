@@ -9,8 +9,9 @@
 //   b2 [2]  WgtDraw    per-draw constants (edge fade, first FX instance)
 //   t0 [3]  gTex       primary texture (glyph atlas / image / layer / pyramid source)
 //   t1..t6 [4..9]      backdrop pyramid (t1 = level 0 = full resolution, t2..t6 = 1/2 .. 1/32)
-//   t7 [10] gFxData    FX instance data: StructuredBuffer<float4> or, with ESIA_FX_STORAGE_TEXTURE, an RGBA32F
-//                      texture fetched by texel (APIs without structured / storage buffers)
+//   t7 [10] gFxData    instance data - FX instances, then quads (esia_quad.hlsl): StructuredBuffer<float4> or, with
+//                      ESIA_FX_STORAGE_TEXTURE, an RGBA32F texture fetched by texel (APIs without structured / storage
+//                      buffers)
 //   s0 [11] linear clamp, s1 [12] point clamp
 //
 // Pixel positions: SV_Position is read through WgtPixelPos, render-target textures are sampled through
@@ -83,7 +84,8 @@ ESIA_CBUFFER(WgtFrame, b0, 0)
     float4 gLevel[6];   // backdrop pyramid: xy size (px), zw 1/size. [0] = full-res copy
     float4 gText;       // x gamma, y grayscale enhanced contrast, z ClearType enhanced contrast, w ClearType level
     float4 gConv;       // x: 1 = framebuffer origin bottom-left (flip y)  y: SV_Position offset to pixel centers
-                        // z: FX instances per row of the instance texture  w: unused
+                        // z: FX instances per row of the instance texture  w: where the quads start in the
+                        // instance data (a row of the buffer, or of the texture)
 };
 
 ESIA_CBUFFER(WgtPass, b1, 1)

@@ -4,7 +4,8 @@
 //   1. BeginFrame; the TextureRegistry's pending changes become RHI textures (glyph pages, images);
 //   2. FramePlan::Build: batches, capture decisions, merged vertex / index / instance buffers, uploaded once;
 //   3. the plan runs in passes on the target:
-//      * geometry and text with the UI programs (the text program follows the texture's coverage format),
+//      * geometry with the UI programs, glyphs and flat tiles as instanced quads (the program follows the texture's
+//        coverage format; the quads' rows follow the FX instances in the instance data),
 //      * FX batches as one instanced draw each (4-vertex strips; instance data in a buffer or RGBA32F texture),
 //      * before a glass batch the planner marked: the backdrop capture - end the pass, copy the capture region out
 //        of the target (or read the target directly when no glass reads the full-resolution level and the target
@@ -64,6 +65,7 @@ namespace esia::render
         int glowLayers = 0;
         int vertices = 0;
         int indices = 0;
+        int quads = 0;                    // instanced quads (QuadInstance: glyphs, flat tiles)
         bool overBudget = false;          // maxBackdropCaptures was reached this frame
         int fxFallbacks = 0;              // FX batches drawn with the full shader: their variant was refused or failed
         int fxPendingVariants = 0;        // FX batches drawn with a substitute while their variant compiles (asyncPipelines)

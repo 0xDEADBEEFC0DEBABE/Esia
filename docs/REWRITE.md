@@ -360,9 +360,11 @@ Binding numbers, identical everywhere:
 
 `include/esia/text/text.hpp` is the interface Painter and widgets use: fonts (files, memory, fallback chain),
 `NewFrame(RasterParams)` (pixel density), `Measure`, `Draw` (glyph quads into a `DrawList`, rasterized at the
-scaled size under `PushScale`), `DrawGlyph` (icon fonts). A text system owns its glyph pages in the
-`TextureRegistry`: Alpha8 coverage, which the renderer recognizes from the page's format and draws with its text
-program (`TextGray`), so text needs no special commands; the gamma / contrast composition of WGT's grayscale text
+scaled size under `PushScale`), `DrawGlyph` (icon fonts). Glyphs are instanced quads (`DrawList::BeginQuads`,
+`QuadInstance`: 32 bytes each, expanded by `QuadVS` on the GPU), as are the Painter's flat tiles, so a frame of plain
+widgets uploads no vertices and no indices. A text system owns its glyph pages in the `TextureRegistry`: Alpha8
+coverage, which the renderer recognizes from the page's format and draws with its text program (`QuadGray`), so text
+needs no special commands; the gamma / contrast composition of WGT's grayscale text
 shader (`TextComposition`, DirectWrite's model) applies to every backend.
 
 **Sub-pixel text.** Removed in core round 3 by the owner's decision and brought back on 2026-10-28 at the owner's

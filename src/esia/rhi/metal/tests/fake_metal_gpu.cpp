@@ -542,7 +542,7 @@ namespace esia::rhi::metal::test
             return;
         }
         const Pso& p = psos_[pipeline_ - 1];
-        const std::uint32_t want = p.desc.program == ShaderProgram::Fx ? mtl::PrimitiveTypeTriangleStrip : mtl::PrimitiveTypeTriangle;
+        const std::uint32_t want = DrawsInstances(p.desc.program) ? mtl::PrimitiveTypeTriangleStrip : mtl::PrimitiveTypeTriangle;
         if (primitive != want)
             Error(std::string(call) + ": primitive type does not fit the program");
         for (const MslInterface* m : {&p.vs, &p.ps})

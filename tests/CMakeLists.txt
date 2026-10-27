@@ -92,6 +92,16 @@ foreach(_b ${_esia_backends})
     endif()
 endforeach()
 
+# the renderer on fixed workloads (tests/bench/esia_bench.cpp): build, submit and GPU time per frame, median and 99th
+# percentile. CTest only runs it a few frames on the null device, so that it keeps working.
+if(TARGET esia_text_ft)
+    add_executable(esia_bench bench/esia_bench.cpp)
+    target_link_libraries(esia_bench PRIVATE esia::render esia_text_ft esia::backends)
+    target_compile_definitions(esia_bench PRIVATE ESIA_BENCH_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+    esia_target_defaults(esia_bench)
+    add_test(NAME esia_bench_smoke COMMAND esia_bench --backend null --frames 3 --warmup 1 --size 640x400)
+endif()
+
 esia_add_test(esia_shader_tests shaders/test_shader_library.cpp)
 target_link_libraries(esia_shader_tests PRIVATE esia_shaders)
 

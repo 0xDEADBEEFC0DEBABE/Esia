@@ -264,7 +264,8 @@ set(_esia_shader_srcs
     ${ESIA_SHADER_DIR}/esia_common.hlsli
     ${ESIA_SHADER_DIR}/esia_ui.hlsl
     ${ESIA_SHADER_DIR}/esia_fx.hlsl
-    ${ESIA_SHADER_DIR}/esia_post.hlsl)
+    ${ESIA_SHADER_DIR}/esia_post.hlsl
+    ${ESIA_SHADER_DIR}/esia_quad.hlsl)
 
 if(ESIA_SHADERS_REGENERATE)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)

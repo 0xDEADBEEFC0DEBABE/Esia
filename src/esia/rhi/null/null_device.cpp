@@ -266,8 +266,8 @@ namespace esia::rhi
         }
         if (UsesUiVertices(d.program) != (d.layout == VertexLayout::UiVertex))
             Error(Fmt("CreatePipeline: %s with the wrong vertex layout", ShaderProgramName(d.program)));
-        if ((d.program == ShaderProgram::TextLcd) != (d.blend == BlendMode::DualSourceLcd))
-            Error("CreatePipeline: TextLcd needs (and only it may use) dual-source blending");
+        if (DualSourceProgram(d.program) != (d.blend == BlendMode::DualSourceLcd))
+            Error("CreatePipeline: TextLcd and QuadLcd need (and only they may use) dual-source blending");
         const Pipeline p{next_++};
         pipelines_[p.id] = d;
         const bool glyphVariant = !caps_.fullFxGlyphs && (d.fxFeatures & fx::kGlyph);
@@ -491,11 +491,11 @@ namespace esia::rhi
             return;
         }
         const PipelineDesc& p = it->second;
-        if ((p.program == ShaderProgram::Fx) != instanced)
+        if (DrawsInstances(p.program) != instanced)
             Error(Fmt("%s: program %s", call, ShaderProgramName(p.program)));
         // What each program's shaders declare must be bound: Vulkan and D3D12 have no "unbound" descriptors, and
         // Metal / GL would read whatever an earlier draw left.
-        const bool ui = UsesUiVertices(p.program);
+        const bool ui = UsesUiVertices(p.program) || DrawsInstances(p.program);
         const bool fx = p.program == ShaderProgram::Fx;
         const bool composite = p.program == ShaderProgram::LayerComposite;
         const bool usesPass = p.program == ShaderProgram::Downsample || composite;
@@ -509,7 +509,7 @@ namespace esia::rhi
         for (int sl = 0; sl < slots; ++sl)
             if (!bound_[sl])
                 Error(Fmt("%s (%s): nothing bound at t%d", call, ShaderProgramName(p.program), sl));
-        if (fx)
+        if (DrawsInstances(p.program))
         {
             const bool data = caps_.fxStorage == FxStorage::Buffer ? (bool)fxBuffer_ : (bool)bound_[kSlotFxData];
             if (!data)

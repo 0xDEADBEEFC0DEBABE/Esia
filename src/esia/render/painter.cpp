@@ -171,8 +171,9 @@ namespace esia
             float u[4], v[4];
             int nx, ny;
             bool plainMiddle, skipMiddle;
-            std::uint32_t indexCount;
-            std::uint32_t indices[54];            // the cells' triangles, from the grid's first vertex
+            std::uint32_t cellCount;
+            std::uint8_t cells[9];                // the cells drawn: x | y << 2 in the grid
+            float cellUv[9][2];                   // ... their uv, packed (QuadInstance::PackUv)
         };
         thread_local FlatTile tFlatTiles[128];
         bool SameInputs(const std::int32_t* a, const std::int32_t* b)
@@ -667,16 +668,15 @@ namespace esia
             const bool middle = t.nx == 4 && t.ny == 4;
             t.plainMiddle = middle && !ring && (w - 2.0f * (float)(C - P)) * (h - 2.0f * (float)(C - P)) > 48.0f * 48.0f;
             t.skipMiddle = middle && (ring || t.plainMiddle);
-            t.indexCount = 0;
+            t.cellCount = 0;
             for (int yi = 0; yi + 1 < t.ny; ++yi)
                 for (int xi = 0; xi + 1 < t.nx; ++xi)
                 {
                     if (t.skipMiddle && xi == 1 && yi == 1)
                         continue;
-                    const int a = yi * t.nx + xi;
-                    const int q[6] = {a, a + 1, a + 1 + t.nx, a, a + 1 + t.nx, a + t.nx};
-                    for (const int k : q)
-                        t.indices[t.indexCount++] = (std::uint32_t)k;
+                    t.cells[t.cellCount] = (std::uint8_t)(xi | (yi << 2));
+                    QuadInstance::PackUv(Vec2(t.u[xi], t.v[yi]), Vec2(t.u[xi + 1], t.v[yi + 1]), t.cellUv[t.cellCount]);
+                    ++t.cellCount;
                 }
             return &t;
         };
@@ -690,36 +690,27 @@ namespace esia
                 gy[k] = ((t.ny == 4 && k >= 2 ? p1.y : p0.y) + t.offY[k]) * inv;
             const std::uint32_t col = color.ToRgba8();
             if (t.plainMiddle)
+                dl_->AddQuad(0, esia::Rect(gx[1], gy[1], gx[2], gy[2]), Vec2(0.5f, 0.5f), Vec2(0.5f, 0.5f), col);
+            // the cells as quads: the grid's rects, the tile's packed uv
+            float c[2];
+            QuadInstance::PackColor(col, c);
+            DrawList::QuadWriter w = dl_->BeginQuads(t.page, t.cellCount);
+            for (std::uint32_t k = 0; k < t.cellCount; ++k)
             {
-                DrawList::PrimWriter pw = dl_->PrimReserve(0, 6, 4);
-                const Vec2 wuv(0.5f, 0.5f);
-                pw.vtx[0] = {Vec2(gx[1], gy[1]), wuv, col};
-                pw.vtx[1] = {Vec2(gx[2], gy[1]), wuv, col};
-                pw.vtx[2] = {Vec2(gx[2], gy[2]), wuv, col};
-                pw.vtx[3] = {Vec2(gx[1], gy[2]), wuv, col};
-                const std::uint32_t b = pw.base;
-                pw.idx[0] = b, pw.idx[1] = b + 1, pw.idx[2] = b + 2, pw.idx[3] = b, pw.idx[4] = b + 2, pw.idx[5] = b + 3;
-                dl_->PrimCommit(pw, 6, esia::Rect(gx[1], gy[1], gx[2], gy[2]));
+                const int xi = t.cells[k] & 3, yi = t.cells[k] >> 2;
+                QuadInstance& q = w.quad[k];
+                q.rect[0] = gx[xi];
+                q.rect[1] = gy[yi];
+                q.rect[2] = gx[xi + 1];
+                q.rect[3] = gy[yi + 1];
+                q.packed[0] = t.cellUv[k][0];
+                q.packed[1] = t.cellUv[k][1];
+                q.packed[2] = c[0];
+                q.packed[3] = c[1];
             }
-            DrawList::PrimWriter pw = dl_->PrimReserve(t.page, t.indexCount, (std::uint32_t)(t.nx * t.ny));
-            Vertex* v = pw.vtx;
-            for (int yi = 0; yi < t.ny; ++yi)
-            {
-                const float y = gy[yi], vv = t.v[yi];
-                for (int xi = 0; xi < t.nx; ++xi, ++v)
-                {
-                    v->pos.x = gx[xi];
-                    v->pos.y = y;
-                    v->uv.x = t.u[xi];
-                    v->uv.y = vv;
-                    v->color = col;
-                }
-            }
-            const std::uint32_t base = pw.base, n = t.indexCount;
-            std::uint32_t* x = pw.idx;
-            for (std::uint32_t k = 0; k < n; ++k)
-                x[k] = base + t.indices[k];
-            dl_->PrimCommit(pw, n, esia::Rect(gx[0], gy[0], gx[t.nx - 1], gy[t.ny - 1]));
+            w.written = t.cellCount;
+            w.bounds = esia::Rect(gx[0], gy[0], gx[t.nx - 1], gy[t.ny - 1]);
+            dl_->EndQuads(w);
         };
 
         const bool wantFill = fill.a > 0.0f, wantStroke = stroke.a > 0.0f && strokeWidth > 0.0f;
@@ -826,11 +817,11 @@ namespace esia
                 at = ScalePoint(at, scaleOrigin_[i], scaleValue_[i]);
                 k *= scaleValue_[i];
             }
-            const std::size_t start = dl_->Vertices().size();
+            const std::size_t start = dl_->Vertices().size(), quadStart = dl_->Quads().size();
             if (outlined)
                 env_.text->DrawOutline(*dl_, font, at, outline, text, wrapWidth, flags, k);
             const Vec2 size = env_.text->Draw(*dl_, font, at, color, text, wrapWidth, flags, k);
-            ExcludeFromScale(start);
+            ExcludeFromScale(start, quadStart);
             return size;
         }
         if (outlined)
@@ -880,9 +871,9 @@ namespace esia
             }
             ScaleLengths(m, k);
             m.radii[3] *= k;   // the legibility halo's radius (radii.z is its strength)
-            const std::size_t start = dl_->Vertices().size();
+            const std::size_t start = dl_->Vertices().size(), quadStart = dl_->Quads().size();
             const Vec2 size = env_.text->DrawShapes(*dl_, font, at, m, s.effect, s.weight, text, wrapWidth, flags, k);
-            ExcludeFromScale(start);
+            ExcludeFromScale(start, quadStart);
             return size;
         }
         return env_.text->DrawShapes(*dl_, font, pos, m, s.effect, s.weight, text, wrapWidth, flags, 1.0f);
@@ -929,14 +920,14 @@ namespace esia
                 at = ScalePoint(at, scaleOrigin_[i], scaleValue_[i]);
                 k *= scaleValue_[i];
             }
-            const std::size_t start = dl_->Vertices().size();
+            const std::size_t start = dl_->Vertices().size(), quadStart = dl_->Quads().size();
             if (outlined)
             {
                 outline.width *= k;
                 env_.text->DrawGlyphOutline(*dl_, text::FontRef{font.id, font.size * k}, icon, at, outline);
             }
             env_.text->DrawGlyph(*dl_, text::FontRef{font.id, font.size * k}, icon, at, color);
-            ExcludeFromScale(start);
+            ExcludeFromScale(start, quadStart);
             return;
         }
         if (outlined)
@@ -944,12 +935,14 @@ namespace esia
         env_.text->DrawGlyph(*dl_, font, icon, center, color);
     }
 
-    void Painter::ExcludeFromScale(std::size_t vtxStart)
+    void Painter::ExcludeFromScale(std::size_t vtxStart, std::size_t quadStart)
     {
-        if (dl_->Vertices().size() > vtxStart && excludedCount_ < kMaxExcluded)
+        if ((dl_->Vertices().size() > vtxStart || dl_->Quads().size() > quadStart) && excludedCount_ < kMaxExcluded)
         {
             excludedStart_[excludedCount_] = vtxStart;
             excludedEnd_[excludedCount_] = dl_->Vertices().size();
+            excludedQuadStart_[excludedCount_] = quadStart;
+            excludedQuadEnd_[excludedCount_] = dl_->Quads().size();
             ++excludedCount_;
         }
     }
@@ -1237,6 +1230,7 @@ namespace esia
         scaleOrigin_[scaleDepth_] = origin;
         scaleValue_[scaleDepth_] = scale;
         scaleVtxStart_[scaleDepth_] = dl_->Vertices().size();
+        scaleQuadStart_[scaleDepth_] = dl_->Quads().size();
         ++scaleDepth_;
     }
 
@@ -1264,7 +1258,25 @@ namespace esia
                 }
                 vtx[i].pos = ScalePoint(vtx[i].pos, o, k);
             }
-            dl_->RefreshBounds(scaleVtxStart_[scaleDepth_]);
+            QuadVector& quads = dl_->Quads();
+            ex = 0;
+            for (std::size_t i = scaleQuadStart_[scaleDepth_]; i < quads.size(); ++i)
+            {
+                while (ex < excludedCount_ && i >= excludedQuadEnd_[ex])
+                    ++ex;
+                if (ex < excludedCount_ && i >= excludedQuadStart_[ex])
+                {
+                    i = excludedQuadEnd_[ex] - 1;
+                    continue;
+                }
+                float* r = quads[i].rect;
+                const Vec2 a = ScalePoint(Vec2(r[0], r[1]), o, k), b = ScalePoint(Vec2(r[2], r[3]), o, k);
+                r[0] = a.x;
+                r[1] = a.y;
+                r[2] = b.x;
+                r[3] = b.y;
+            }
+            dl_->RefreshBounds(scaleVtxStart_[scaleDepth_], scaleQuadStart_[scaleDepth_]);
         }
         if (scaleDepth_ == 0)
             excludedCount_ = 0;

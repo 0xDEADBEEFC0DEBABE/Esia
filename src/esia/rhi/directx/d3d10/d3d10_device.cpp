@@ -481,7 +481,7 @@ namespace esia::rhi::d3d10
 
         Pipeline CreatePipeline(const PipelineDesc& desc) override
         {
-            if (desc.program >= ShaderProgram::Count || (desc.blend == BlendMode::DualSourceLcd) != (desc.program == ShaderProgram::TextLcd))
+            if (desc.program >= ShaderProgram::Count || (desc.blend == BlendMode::DualSourceLcd) != DualSourceProgram(desc.program))
                 return {};
             d3d::ShaderRequest vr;
             vr.program = desc.program;

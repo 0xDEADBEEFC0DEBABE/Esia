@@ -65,10 +65,9 @@ namespace
     {
         PipelineDesc d;
         d.program = p;
-        const bool ui = p == ShaderProgram::UiGeometry || p == ShaderProgram::TextGray || p == ShaderProgram::TextLcd || p == ShaderProgram::TextLcdGray;
-        d.layout = ui ? VertexLayout::UiVertex : VertexLayout::None;
-        d.topology = p == ShaderProgram::Fx ? Topology::TriangleStrip : Topology::TriangleList;
-        d.blend = p == ShaderProgram::TextLcd                                       ? BlendMode::DualSourceLcd
+        d.layout = UsesUiVertices(p) ? VertexLayout::UiVertex : VertexLayout::None;
+        d.topology = DrawsInstances(p) ? Topology::TriangleStrip : Topology::TriangleList;
+        d.blend = DualSourceProgram(p)                                              ? BlendMode::DualSourceLcd
                   : p == ShaderProgram::Fx || p == ShaderProgram::LayerComposite    ? BlendMode::Premultiplied
                   : p == ShaderProgram::Downsample || p == ShaderProgram::Clear     ? BlendMode::Opaque
                                                                                     : BlendMode::Straight;

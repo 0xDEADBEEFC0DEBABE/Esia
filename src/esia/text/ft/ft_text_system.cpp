@@ -263,7 +263,7 @@ namespace esia::text
             };
             struct QuadSet
             {
-                std::vector<Vertex> quads;   // 4 per drawn glyph, as QuadWriter writes them
+                std::vector<QuadInstance> quads;   // one per drawn glyph, its rect in pixels from the origin
                 std::vector<QuadRun> runs;   // one per change of atlas page
                 Rect bounds;                 // pixels from the origin's whole pixel
                 std::uint64_t generation = 0;   // 0 = none
@@ -790,7 +790,7 @@ namespace esia::text
                         continue;
                     const Rect r((xi + (float)s->left) * inv, (yi + (float)s->top) * inv, (xi + (float)(s->left + s->width)) * inv,
                                  (yi + (float)(s->top + s->height)) * inv);
-                    dl.AddImage(s->page, r, s->uv0, s->uv1, (s->color ? Color::White(fill.a) : fill).ToRgba8());
+                    dl.AddQuad(s->page, r, s->uv0, s->uv1, (s->color ? Color::White(fill.a) : fill).ToRgba8());
                 }
                 return layout->metrics.size;
             }
@@ -923,14 +923,10 @@ namespace esia::text
                     if (!s || !s->page || s->width <= 0 || s->height <= 0 || !(s->color ? colorShown : rgbaShown))
                         continue;
                     if (set.runs.empty() || set.runs.back().page != s->page)
-                        set.runs.push_back({s->page, (std::uint32_t)(set.quads.size() / 4), 0});
+                        set.runs.push_back({s->page, (std::uint32_t)set.quads.size(), 0});
                     ++set.runs.back().count;
                     const Rect r(xi + (float)s->left, yi + (float)s->top, xi + (float)(s->left + s->width), yi + (float)(s->top + s->height));
-                    const std::uint32_t c = s->color ? colorGlyphRgba : rgba;
-                    set.quads.push_back({r.min, s->uv0, c});
-                    set.quads.push_back({Vec2(r.max.x, r.min.y), Vec2(s->uv1.x, s->uv0.y), c});
-                    set.quads.push_back({r.max, s->uv1, c});
-                    set.quads.push_back({Vec2(r.min.x, r.max.y), Vec2(s->uv0.x, s->uv1.y), c});
+                    set.quads.emplace_back().Set(r, s->uv0, s->uv1, s->color ? colorGlyphRgba : rgba);
                     set.bounds = set.bounds.Union(r);
                     set.runs.back().bounds = set.runs.back().bounds.Union(r);
                 }
@@ -959,24 +955,15 @@ namespace esia::text
                     for (const Layout::QuadRun& run : set.runs)
                     {
                         DrawList::QuadWriter w = dl.BeginQuads(run.page, run.count);
-                        const Vertex* q = set.quads.data() + (std::size_t)run.first * 4;
-                        Vertex* v = w.vtx;
-                        std::uint32_t* x = w.idx;
-                        std::uint32_t b = w.base;
-                        for (std::uint32_t i = 0; i < run.count; ++i, q += 4, v += 4, x += 6, b += 4)
+                        const QuadInstance* q = set.quads.data() + run.first;
+                        QuadInstance* d = w.quad;
+                        for (std::uint32_t i = 0; i < run.count; ++i, ++q, ++d)
                         {
-                            const float x0 = (q[0].pos.x + ox) * inv, y0 = (q[0].pos.y + oy) * inv;
-                            const float x1 = (q[2].pos.x + ox) * inv, y1 = (q[2].pos.y + oy) * inv;
-                            v[0] = {Vec2(x0, y0), q[0].uv, q[0].color};
-                            v[1] = {Vec2(x1, y0), q[1].uv, q[1].color};
-                            v[2] = {Vec2(x1, y1), q[2].uv, q[2].color};
-                            v[3] = {Vec2(x0, y1), q[3].uv, q[3].color};
-                            x[0] = b;
-                            x[1] = b + 1;
-                            x[2] = b + 2;
-                            x[3] = b;
-                            x[4] = b + 2;
-                            x[5] = b + 3;
+                            d->rect[0] = (q->rect[0] + ox) * inv;
+                            d->rect[1] = (q->rect[1] + oy) * inv;
+                            d->rect[2] = (q->rect[2] + ox) * inv;
+                            d->rect[3] = (q->rect[3] + oy) * inv;
+                            std::memcpy(d->packed, q->packed, sizeof(d->packed));
                         }
                         w.written = run.count;
                         w.bounds = Rect((run.bounds.min.x + ox) * inv, (run.bounds.min.y + oy) * inv, (run.bounds.max.x + ox) * inv,
@@ -989,10 +976,10 @@ namespace esia::text
                 {
                     DrawList::QuadWriter w;
                     bool open = false;
-                    const Vertex* q = set.quads.data() + (std::size_t)run.first * 4;
-                    for (std::uint32_t i = 0; i < run.count; ++i, q += 4)
+                    const QuadInstance* q = set.quads.data() + run.first;
+                    for (std::uint32_t i = 0; i < run.count; ++i, ++q)
                     {
-                        const Rect r((q[0].pos.x + ox) * inv, (q[0].pos.y + oy) * inv, (q[2].pos.x + ox) * inv, (q[2].pos.y + oy) * inv);
+                        const Rect r((q->rect[0] + ox) * inv, (q->rect[1] + oy) * inv, (q->rect[2] + ox) * inv, (q->rect[3] + oy) * inv);
                         if (!r.Overlaps(clip))
                             continue;
                         if (!open)   // a run opens at its first quad in view (no empty command when none is)
@@ -1000,7 +987,13 @@ namespace esia::text
                             w = dl.BeginQuads(run.page, run.count - i);
                             open = true;
                         }
-                        w.Add(r, q[0].uv, q[2].uv, q[0].color);
+                        QuadInstance& d = w.quad[w.written++];
+                        d.rect[0] = r.min.x;
+                        d.rect[1] = r.min.y;
+                        d.rect[2] = r.max.x;
+                        d.rect[3] = r.max.y;
+                        std::memcpy(d.packed, q->packed, sizeof(d.packed));
+                        w.bounds = w.bounds.Union(r);
                     }
                     if (open)
                         dl.EndQuads(w);
@@ -1026,10 +1019,10 @@ namespace esia::text
                 const GlyphSlot* o = OutlineGlyph(face, (std::uint16_t)glyph, em, 0, OutlineQ(outline.width * rs));
                 if (!o || !o->page || o->width <= 0 || o->height <= 0)
                     return;
-                dl.AddImage(o->page,
-                            Rect((ox + (float)o->left) * inv, (oy + (float)o->top) * inv, (ox + (float)(o->left + o->width)) * inv,
-                                 (oy + (float)(o->top + o->height)) * inv),
-                            o->uv0, o->uv1, outline.color.ToRgba8());
+                dl.AddQuad(o->page,
+                           Rect((ox + (float)o->left) * inv, (oy + (float)o->top) * inv, (ox + (float)(o->left + o->width)) * inv,
+                                (oy + (float)(o->top + o->height)) * inv),
+                           o->uv0, o->uv1, outline.color.ToRgba8());
             }
 
             void DrawGlyph(DrawList& dl, FontRef font, char32_t codepoint, Vec2 center, Color color) override
@@ -1048,10 +1041,10 @@ namespace esia::text
                 // optical centering: the ink box's center on `center`, the pen on a whole pixel
                 const float ox = std::floor(center.x * rs - (s->ink.min.x + s->ink.max.x) * 0.5f + 0.5f);
                 const float oy = std::floor(center.y * rs - (s->ink.min.y + s->ink.max.y) * 0.5f + 0.5f);
-                dl.AddImage(s->page,
-                            Rect((ox + (float)s->left) * inv, (oy + (float)s->top) * inv, (ox + (float)(s->left + s->width)) * inv,
-                                 (oy + (float)(s->top + s->height)) * inv),
-                            s->uv0, s->uv1, s->color ? Color::White(color.a).ToRgba8() : color.ToRgba8());
+                dl.AddQuad(s->page,
+                           Rect((ox + (float)s->left) * inv, (oy + (float)s->top) * inv, (ox + (float)(s->left + s->width)) * inv,
+                                (oy + (float)(s->top + s->height)) * inv),
+                           s->uv0, s->uv1, s->color ? Color::White(color.a).ToRgba8() : color.ToRgba8());
             }
 
         private:

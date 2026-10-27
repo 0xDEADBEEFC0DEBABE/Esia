@@ -332,8 +332,10 @@ namespace esia::rhi::d3d9
             // FxFetch computes `instance % perRow` and `instance / perRow` in floats here (SM3 has no integers), and
             // fxc's float modulo is inexact for most divisors (6 % 682 comes out as 5.9999, truncated to the previous
             // instance's texels). With 24 * 2^k texels per row, perRow = 2^k and both are exact.
+            // At most 4096 texels wide, as on OpenGL: NVIDIA's driver fails the system-memory surface of a
+            // 16384-texel row upload (E_FAIL), and the device misbehaves after it.
             int perRow = 1;
-            while (perRow * 2 * (int)fx::kInstanceVec4Count <= (int)dc.MaxTextureWidth)
+            while (perRow * 2 * (int)fx::kInstanceVec4Count <= (int)std::min<DWORD>(dc.MaxTextureWidth, 4096))
                 perRow *= 2;
             caps_.maxFxDataWidth = perRow * (int)fx::kInstanceVec4Count;
 
@@ -568,7 +570,7 @@ namespace esia::rhi::d3d9
 
         Pipeline CreatePipeline(const PipelineDesc& desc) override
         {
-            if (desc.program >= ShaderProgram::Count || desc.blend == BlendMode::DualSourceLcd || desc.program == ShaderProgram::TextLcd)
+            if (desc.program >= ShaderProgram::Count || desc.blend == BlendMode::DualSourceLcd || DualSourceProgram(desc.program))
                 return {};   // no dual-source blending on D3D9
             d3d::ShaderRequest vr;
             vr.program = desc.program;
@@ -614,7 +616,7 @@ namespace esia::rhi::d3d9
             p.ps = ShaderOf(ps, false);
             if (!p.vs || !p.ps)
                 return {};
-            p.decl = desc.layout == VertexLayout::UiVertex ? uiDecl_.Get() : desc.program == ShaderProgram::Fx ? fxDecl_.Get() : fullscreenDecl_.Get();
+            p.decl = desc.layout == VertexLayout::UiVertex ? uiDecl_.Get() : DrawsInstances(desc.program) ? fxDecl_.Get() : fullscreenDecl_.Get();
             return Pipeline{pipelines_.Add(std::move(p))};
         }
 

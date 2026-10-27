@@ -57,6 +57,10 @@ namespace esia::rhi
         case ShaderProgram::Clear: return "Clear";
         case ShaderProgram::TextLcd: return "TextLcd";
         case ShaderProgram::TextLcdGray: return "TextLcdGray";
+        case ShaderProgram::QuadImage: return "QuadImage";
+        case ShaderProgram::QuadGray: return "QuadGray";
+        case ShaderProgram::QuadLcd: return "QuadLcd";
+        case ShaderProgram::QuadLcdGray: return "QuadLcdGray";
         case ShaderProgram::Count: break;
         }
         return "?";

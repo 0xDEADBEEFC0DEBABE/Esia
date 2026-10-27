@@ -42,10 +42,10 @@ namespace esia::rhi::metal
             why = "dual-source blending unsupported";
             return false;
         }
-        if ((d.program == ShaderProgram::TextLcd) != (d.blend == BlendMode::DualSourceLcd))
+        if (DualSourceProgram(d.program) != (d.blend == BlendMode::DualSourceLcd))
         {
             // TextLcdPS writes two outputs (color(0) index(0 / 1)); every other program writes one
-            why = "TextLcd needs, and only it may use, dual-source blending";
+            why = "TextLcd and QuadLcd need, and only they may use, dual-source blending";
             return false;
         }
         if (ProgramUsesVertices(d.program) != (d.layout == VertexLayout::UiVertex))
