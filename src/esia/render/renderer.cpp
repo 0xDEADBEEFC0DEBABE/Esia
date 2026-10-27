@@ -122,6 +122,12 @@ namespace esia::render
         // this frame
         rhi::Texture target;
         rhi::TextureDesc targetDesc;
+        // HDR output (RenderParams::hdr): the frame draws into `working`; `host` is the target it decodes from and
+        // encodes to over `hdrRegion` (through `hostCopy` where the target cannot be sampled)
+        bool hdr = false, hostRead = false;
+        rhi::Texture host, working, hostCopy;
+        rhi::TextureDesc hostDesc;
+        PxRect hdrRegion;
         int W = 0, H = 0;
         FrameConstants frameMain{}, frameLayer{};
         int layerDepth = 0;
@@ -183,6 +189,8 @@ namespace esia::render
             textures.clear();
             Release(white);
             Release(fxTex);
+            Release(working);
+            Release(hostCopy);
             for (rhi::Buffer* b : {&vb, &ib, &fxBuf, &quadBuf})
                 if (*b)
                 {
@@ -498,6 +506,94 @@ namespace esia::render
             fc.conv[3] = quadStart;
             frameLayer = fc;
             frameLayer.time[3] = 0.0f;   // layers are composed in gamma space and converted on composite
+        }
+
+        // ------------------------------------------------------------ HDR output
+        // The working target: RGBA16_FLOAT at the target's size, drawn into instead of it.
+        bool EnsureWorking()
+        {
+            if (working)
+            {
+                const rhi::TextureDesc d = dev.GetTextureDesc(working);
+                if (d.width == W && d.height == H)
+                    return true;
+                Release(working);
+            }
+            working = MakeTexture(W, H, rhi::Format::RGBA16_FLOAT,
+                                  rhi::TextureUsage_RenderTarget | rhi::TextureUsage_Sampled | rhi::TextureUsage_CopySrc | rhi::TextureUsage_CopyDst, "hdr-working");
+            return (bool)working;
+        }
+
+        // The pixels the frame draws on or reads from (the backdrop its glass captures), in whole pixels.
+        PxRect HdrRegion() const
+        {
+            PxRect r;
+            for (const RenderOp& op : plan.ops)
+                for (const PxRect& p : {op.bounds, op.glassRegion, op.captureRegion})
+                    if (!p.Empty())
+                        r = r.Empty() ? p : r.Union(p);
+            if (r.Empty())
+                return r;
+            r.x0 = std::max(0.0f, std::floor(r.x0));
+            r.y0 = std::max(0.0f, std::floor(r.y0));
+            r.x1 = std::min((float)W, std::ceil(r.x1));
+            r.y1 = std::min((float)H, std::ceil(r.y1));
+            return r;
+        }
+
+        static PassConstants HdrConstants(const HdrOutput& h)
+        {
+            return {{std::max(h.paperWhiteNits, 1.0f), h.encoding == HdrEncoding::Pq2020 ? 2.0f : 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}};
+        }
+
+        // The target's region into the working target as extended sRGB (HdrDecodePS). The pass stays open for the
+        // frame's content.
+        void DecodeHdr(const HdrOutput& h)
+        {
+            rhi::Texture src = host;
+            const rhi::IRect r{(int)hdrRegion.x0, (int)hdrRegion.y0, (int)hdrRegion.x1, (int)hdrRegion.y1};
+            if (!hostRead)
+            {
+                // a target that cannot be sampled: its region copied aside first (before the frame's first pass)
+                const rhi::Format f = rhi::RawFormat(hostDesc.format);
+                if (hostCopy)
+                {
+                    const rhi::TextureDesc d = dev.GetTextureDesc(hostCopy);
+                    if (d.width != W || d.height != H || d.format != f)
+                        Release(hostCopy);
+                }
+                if (!hostCopy)
+                    hostCopy = MakeTexture(W, H, f, rhi::TextureUsage_Sampled | rhi::TextureUsage_CopyDst, "hdr-target-copy");
+                if (!hostCopy)
+                    return;
+                dev.CopyTexture(hostCopy, r.x0, r.y0, host, r);
+                src = hostCopy;
+            }
+            BeginPass(working, rhi::LoadOp::DontCare, frameMain, "hdr-decode");
+            if (!BindPipeline(GetPipeline(rhi::ShaderProgram::HdrDecode, rhi::BlendMode::Opaque)) || !SetScissor(hdrRegion))
+                return;
+            EnsureFrame();
+            const PassConstants pc = HdrConstants(h);
+            dev.SetConstants(rhi::ConstantSlot::Pass, &pc, sizeof(pc));
+            BindTexture(rhi::kSlotTexture, src);
+            dev.Draw(3, 0);
+            ++stats.drawCalls;
+        }
+
+        // The working target's region back into the target in its encoding (HdrEncodePS).
+        void EncodeHdr(const HdrOutput& h)
+        {
+            BeginPass(host, rhi::LoadOp::Load, frameMain, "hdr-encode");
+            if (BindPipeline(GetPipeline(rhi::ShaderProgram::HdrEncode, rhi::BlendMode::Opaque)) && SetScissor(hdrRegion))
+            {
+                EnsureFrame();
+                const PassConstants pc = HdrConstants(h);
+                dev.SetConstants(rhi::ConstantSlot::Pass, &pc, sizeof(pc));
+                BindTexture(rhi::kSlotTexture, working);
+                dev.Draw(3, 0);
+                ++stats.drawCalls;
+            }
+            EndPass();
         }
 
         // ------------------------------------------------------------ passes and bindings
@@ -1237,9 +1333,28 @@ namespace esia::render
             // reads it directly if it can be sampled, else it has no backdrop
             canCopy = (targetDesc.usage & rhi::TextureUsage_CopySrc) != 0;
             canRead = caps.sampleRenderTarget && targetDesc.samples == 1 && (targetDesc.usage & rhi::TextureUsage_Sampled) != 0;
+            // HDR output: a float working target, and a single-sampled target to decode from (read, or copied first)
+            hdr = params.hdr.encoding != HdrEncoding::None;
+            if (hdr && (!caps.floatRenderTargets || targetDesc.samples != 1 || (!canRead && !canCopy)))
+                return false;
             if (!dev.BeginFrame(params.frame))
                 return false;
             target = t;
+            if (hdr)
+            {
+                host = t;
+                hostDesc = targetDesc;
+                hostRead = canRead;
+                if (!EnsureWorking())
+                {
+                    dev.EndFrame();
+                    return false;
+                }
+                target = working;
+                targetDesc = dev.GetTextureDesc(working);
+                canCopy = true;
+                canRead = caps.sampleRenderTarget;
+            }
             subpixelText = params.subpixelText;
 
             ApplyTextureChanges(registry);
@@ -1262,6 +1377,8 @@ namespace esia::render
             stats.vertices = (int)plan.totalVertices;
             stats.indices = (int)plan.totalIndices;
             stats.quads = (int)plan.quadCount;
+            if (hdr)
+                hdrRegion = HdrRegion();
 
             const bool glass = plan.anyGlass && (canCopy || canRead);
             const bool surfaces = (glass || plan.anyLayer) && EnsureSurfaces(glass && canCopy, plan.anyLayer);
@@ -1298,8 +1415,13 @@ namespace esia::render
             run = RunNone;
             if (uploaded && white)
             {
+                const bool hdrPasses = hdr && !hdrRegion.Empty();
+                if (hdrPasses)
+                    DecodeHdr(params.hdr);
                 Execute();
                 EndPass();
+                if (hdrPasses)
+                    EncodeHdr(params.hdr);
             }
             stats.backdropCaptures = captures;
             dev.EndFrame();

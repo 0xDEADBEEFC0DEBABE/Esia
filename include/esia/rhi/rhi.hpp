@@ -142,6 +142,9 @@ namespace esia::rhi
         QuadGray,         // QuadVS + TextGrayPS: Alpha8 coverage
         QuadLcd,          // QuadVS + TextLcdPS: sub-pixel coverage (BlendMode::DualSourceLcd)
         QuadLcdGray,      // QuadVS + TextLcdGrayPS: sub-pixel pages with their grayscale coverage
+        // HDR output (render::HdrOutput): the target's region into the working target, and back
+        HdrDecode,        // FullscreenVS + HdrDecodePS: scRGB / PQ BT.2020 at t0 -> extended sRGB
+        HdrEncode,        // FullscreenVS + HdrEncodePS: extended sRGB at t0 -> scRGB / PQ BT.2020
         Count
     };
     ESIA_API const char* ShaderProgramName(ShaderProgram p);

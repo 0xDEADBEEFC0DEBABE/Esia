@@ -1198,7 +1198,9 @@ namespace esia::rhi::d3d9
             const Tex* t = textures_.Find(bound_[slot]);
             dev_->SetTexture(stage, t ? t->tex.Get() : nullptr);
             // s1 (point) where the shaders read gPoint: the FX instances and LayerComposite's sharp layer; else s0
-            const bool point = slot == kSlotFxData || (slot == kSlotTexture && pipe_->desc.program == ShaderProgram::LayerComposite);
+            const ShaderProgram p = pipe_->desc.program;
+            const bool point = slot == kSlotFxData ||
+                               (slot == kSlotTexture && (p == ShaderProgram::LayerComposite || p == ShaderProgram::HdrDecode || p == ShaderProgram::HdrEncode));
             const DWORD filter = point ? D3DTEXF_POINT : D3DTEXF_LINEAR;
             dev_->SetSamplerState(stage, D3DSAMP_MINFILTER, filter);
             dev_->SetSamplerState(stage, D3DSAMP_MAGFILTER, filter);

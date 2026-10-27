@@ -148,6 +148,7 @@ glass_window --api vulkan --vsync off      # another backend, uncapped frame rat
 | `--frames N`, `--screenshot out.png`, `--fixed-dt s` | quit after N frames, write the last one (alone: after 60 frames), advance the UI clock by `s` per frame (deterministic captures) |
 | `--debug` | the API's validation layer; the message count is printed at exit |
 | `--font file` | font files instead of the system's (the first is the main one, the others its fallbacks) |
+| `--hdr` | an scRGB (FP16) swap chain on Direct3D 11 / 12 and the UI at the monitor's SDR white (`RenderParams::hdr`) |
 | `--text-rendering spec` | how glyphs become pixels: `crisp` (the fonts' hints, the classic interpreter, whole pixels), `light`, `cleartype` (sub-pixel), `native` (the platform's look; on Windows the ClearType setup of the window's monitor, from monitor to monitor), `design` (the default), or settings: `hinting=none\|light\|full\|auto`, `interpreter=35\|40`, `rasterizer=analytic\|freetype`, `stem-darkening`, `hinted-advances`, `subpixel=none\|rgb\|bgr`, `lcd-filter=default\|light\|none`, `distance-field=N` (text of N pixels per em and more from distance fields), `smooth-motion[=0\|1]` (moving text unhinted at quarter pixels) |
 
 ## Windows

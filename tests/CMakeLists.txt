@@ -92,6 +92,10 @@ foreach(_b ${_esia_backends})
     endif()
 endforeach()
 
+# HDR output (render::HdrOutput) on every backend built in: the encodings' numbers and the decode
+esia_add_test(esia_hdr_tests render/test_hdr.cpp)
+target_link_libraries(esia_hdr_tests PRIVATE esia::render esia::backends)
+
 # the renderer on fixed workloads (tests/bench/esia_bench.cpp): build, submit and GPU time per frame, median and 99th
 # percentile. CTest only runs it a few frames on the null device, so that it keeps working.
 if(TARGET esia_text_ft)

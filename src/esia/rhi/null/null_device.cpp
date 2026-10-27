@@ -501,7 +501,8 @@ namespace esia::rhi
         const bool ui = UsesUiVertices(p.program) || DrawsInstances(p.program);
         const bool fx = p.program == ShaderProgram::Fx;
         const bool composite = p.program == ShaderProgram::LayerComposite;
-        const bool usesPass = p.program == ShaderProgram::Downsample || composite;
+        const bool hdr = p.program == ShaderProgram::HdrDecode || p.program == ShaderProgram::HdrEncode;
+        const bool usesPass = p.program == ShaderProgram::Downsample || composite || hdr;
         if (!constantsSet_[(int)ConstantSlot::Frame])
             Error(Fmt("%s before the frame constants were set", call));
         if (usesPass && !constantsSet_[(int)ConstantSlot::Pass])
