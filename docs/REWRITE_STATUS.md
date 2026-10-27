@@ -30,7 +30,7 @@ lookup and a fallback chain per platform cover Chinese, Japanese and Korean; CJK
 **Widget layer, first part** (branch `feat/ui-foundation`, 2026-09-30): `esia_ui` with WGT's theme, springs,
 styles, text, controls, cards, windows, auto layout, inset grouped lists, navigation, the tab bar, text fields,
 the search bar, menus, pickers, tooltips, scrolling and the line chart, and the `showcase` example. How to use it and what of WGT
-is left: [UI_WIDGETS.md](UI_WIDGETS.md).
+is left: [UI_WIDGETS.md](https://github.com/0xDEADBEEFC0DEBABE/EsiaGUI/blob/main/docs/UI_WIDGETS.md).
 
 **Widget layer, second part** (branch `feat/ui-overlays`, 2026-10-01): glow halos, the island with notifications
 and live activities, the dock, and WGT's demo ported panel for panel as the `showcase`, compared with WGT's
@@ -382,7 +382,7 @@ The README listed "no plots beyond a line chart" against Dear ImGui with ImPlot.
 
 ### What changed
 
-* `src/esia/ui/plot.cpp`, declared in `ui.hpp` ([UI_WIDGETS.md](UI_WIDGETS.md) section 12): `BeginPlot` /
+* `src/esia/ui/plot.cpp`, declared in `ui.hpp` ([UI_WIDGETS.md](https://github.com/0xDEADBEEFC0DEBABE/EsiaGUI/blob/main/docs/UI_WIDGETS.md) section 12): `BeginPlot` /
   `EndPlot` with `PlotLine` (an area under it, smooth or straight), `PlotScatter`, `PlotBars` (grouped, category
   labels), `PlotHistogram`; the view fitted to the data and eased, or fixed limits; ticks at 1, 2 or 5 times a power of
   ten; a legend under the axis whose entries hide their series; a crosshair and a readout of every series; drag to pan,
@@ -820,7 +820,7 @@ Then (the same day):
 ### What changed
 
 * **Data widgets** (`src/esia/ui/number.cpp`, `color.cpp`, `table.cpp`, `text_editor.cpp`, `dock.cpp`;
-  [UI_WIDGETS.md](UI_WIDGETS.md) section 12): `NumberField` (scrub, type an expression, step), `VectorField`,
+  [UI_WIDGETS.md](https://github.com/0xDEADBEEFC0DEBABE/EsiaGUI/blob/main/docs/UI_WIDGETS.md) section 12): `NumberField` (scrub, type an expression, step), `VectorField`,
   `ColorPicker` and `ColorWell`, tables (only the rows in view submitted; sort, resize, select), `TreeNode`,
   `TextEditor` (paragraph layout cached by content, wrapping, line numbers), and docking (a node tree per dock space,
   docked windows behind floating ones under a glass tab bar, drag a header in, drag a tab out, splitters, the layout
@@ -940,7 +940,7 @@ Then (the same day):
 ## Widget layer, second part (`feat/ui-overlays`)
 
 Branch from `main` at `7a2f6e2`, written by the local session. The widgets and the comparison with WGT:
-[UI_WIDGETS.md](UI_WIDGETS.md), sections 4 (glow halos), 10 (the island and the dock) and 11 (the showcase).
+[UI_WIDGETS.md](https://github.com/0xDEADBEEFC0DEBABE/EsiaGUI/blob/main/docs/UI_WIDGETS.md), sections 4 (glow halos), 10 (the island and the dock) and 11 (the showcase).
 
 | Part | Files |
 | --- | --- |
@@ -966,7 +966,7 @@ Branch from `main` at `7a2f6e2`, written by the local session. The widgets and t
 * The showcase with every panel open and `--debug`, 240 frames on each API: no debug-layer or validation message
   on D3D9 (RTX 4080), D3D10, D3D11, D3D12, Vulkan and OpenGL.
 * The showcase captured like WGT's reference screenshots (branch `reference/wgt-1.1`), each panel dark and light at
-  UI scale 1 and 1.5, and compared pixel by pixel: [UI_WIDGETS.md](UI_WIDGETS.md) section 11 has the numbers and
+  UI scale 1 and 1.5, and compared pixel by pixel: [UI_WIDGETS.md](https://github.com/0xDEADBEEFC0DEBABE/EsiaGUI/blob/main/docs/UI_WIDGETS.md) section 11 has the numbers and
   what still differs.
 
 ### Not verified
@@ -979,7 +979,7 @@ Branch from `main` at `7a2f6e2`, written by the local session. The widgets and t
 ## Widget layer, first part (`feat/ui-foundation`)
 
 Branch from `main` at `e43ea9f`, written by the local session. What is ported, how it maps onto the core and what
-is left: [UI_WIDGETS.md](UI_WIDGETS.md), section 13.
+is left: [UI_WIDGETS.md](https://github.com/0xDEADBEEFC0DEBABE/EsiaGUI/blob/main/docs/UI_WIDGETS.md), section 13.
 
 | Part | Files |
 | --- | --- |

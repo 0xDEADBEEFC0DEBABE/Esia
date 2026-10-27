@@ -2,8 +2,9 @@ cmake_minimum_required(VERSION 3.24)
 project(Esia VERSION 0.1.0 LANGUAGES CXX)
 
 # ------------------------------------------------------------------------------
-# Esia - a liquid-glass (iOS 26 style) UI toolkit for games and tools: its own UI core, renderer and render hardware
-# interface with backends for Direct3D 9 / 10 / 11 / 12, OpenGL / OpenGL ES, Vulkan and Metal (docs/REWRITE.md).
+# Esia - a UI engine for games and tools: an immediate-mode UI core, a renderer, a text system and a render hardware
+# interface with backends for Direct3D 9 / 10 / 11 / 12, OpenGL / OpenGL ES, Vulkan and Metal (docs/REWRITE.md). Widget
+# layers build on it: EsiaGUI (github.com/0xDEADBEEFC0DEBABE/EsiaGUI) adds the liquid-glass widgets (src/esia/ui).
 #
 #   cmake --preset windows-msvc                 (or windows-clang-cl, linux-clang, macos-clang, ios: CMakePresets.json)
 #   cmake --build --preset windows-msvc-release

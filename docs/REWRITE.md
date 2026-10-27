@@ -405,7 +405,7 @@ Every implementation feeds its outlines to the same rasterizer and atlas, so a g
 library read the font.
 
 Editing (grapheme-cluster caret movement, selection, undo, IME composition drawn inline) is WGT's
-`ui/text_edit.cpp`, ported onto the interface (`ui::TextField`, [UI_WIDGETS.md](UI_WIDGETS.md) section 4) with one
+`ui/text_edit.cpp`, ported onto the interface (`ui::TextField`, [UI_WIDGETS.md](https://github.com/0xDEADBEEFC0DEBABE/EsiaGUI/blob/main/docs/UI_WIDGETS.md) section 4) with one
 query added for it: `CaretStops(font, text)`, every grapheme boundary of a line with the x where the caret is drawn
 (right-to-left runs and ligatures included). Its default implementation stops at every code point and measures the
 text before it; the FreeType system takes the boundaries from HarfBuzz's clusters and splits a ligature between its

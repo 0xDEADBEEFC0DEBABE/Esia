@@ -568,7 +568,7 @@ After the Win32 platform layer (its core requests, `docs/PLATFORM_WIN32.md` sect
     `InputState::CompositionTargetBegin / End`, the clause the IME is converting (bytes).
 * **Documented**: the horizontal wheel sign. `x > 0` scrolls toward the left, as `y > 0` scrolls toward the top.
 
-For the widget layer (`esia_ui`, [UI_WIDGETS.md](UI_WIDGETS.md)):
+For the widget layer (`esia_ui`, [UI_WIDGETS.md](https://github.com/0xDEADBEEFC0DEBABE/EsiaGUI/blob/main/docs/UI_WIDGETS.md)):
 
 * **Added**: `Context::ViewRect()`, what the innermost child region being submitted shows (else the window): its
   rect, padding included, unmoved by its own scroll. The tab bar and the search bar float at its bottom.
@@ -621,4 +621,4 @@ state. Give each a label of its own ("Label##2") or an id scope (ui::IdScope, Co
   of each window's hit list per frame. `Auto` keeps them to debug builds; the UI tests turn them on in every build
   and fail on any report, so the widget layer itself never trips them.
 * **The widget layer's id scopes**: windows, tables, the multi-line editor and sections are scopes of their own;
-  `ui::IdScope` scopes a loop ([UI_WIDGETS.md](UI_WIDGETS.md) section 14).
+  `ui::IdScope` scopes a loop ([UI_WIDGETS.md](https://github.com/0xDEADBEEFC0DEBABE/EsiaGUI/blob/main/docs/UI_WIDGETS.md) section 14).
