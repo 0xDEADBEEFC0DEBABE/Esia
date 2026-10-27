@@ -207,6 +207,7 @@ namespace esia::rhi::d3d12
             c.readback = true;
             c.runtimeEffects = true;
             c.fxFeatureVariants = false;   // the whole FX shader fits SM5
+            c.fullFxGlyphs = false;        // but leaves out glyph shapes, legibility and motion blur (their own variants)
             // SV_InstanceID does not count StartInstanceLocation: an instance-rate attribute does (InstanceIndices)
             c.drawFirstInstance = true;
             c.baseVertex = true;
@@ -480,6 +481,7 @@ namespace esia::rhi::d3d12
             vr.program = desc.program;
             vr.stage = shaders::Stage::Vertex;
             vr.model = d3d::ShaderModel::Sm5;
+            vr.fxFeatures = desc.program == ShaderProgram::Fx ? desc.fxFeatures : 0u;   // a variant (Caps::fullFxGlyphs)
             vr.instanceAttribute = DrawsInstances(desc.program);   // Caps::drawFirstInstance
             d3d::ShaderRequest pr = vr;
             pr.stage = shaders::Stage::Pixel;

@@ -200,6 +200,10 @@ on all four to the pixel.
 Motion blur (`fx::kMotion`) is left out of SM3's full FX shader too (`fx::kVariantOnlyFeatures`): moving shapes
 take their variant; `motion_blur` passes on all four to the pixel, `ui_light` within one level.
 
+Since then the SM4 / SM5 full shader leaves the three out as well (`Caps::fullFxGlyphs = false` on D3D10 / 11 / 12,
+`ShaderRequest::fxFeatures` now passed for their variants): with them every FX pixel carried 2 more temporaries and
+~1200 more instruction slots, 10,000 shapes took 0.260 instead of 0.236 ms of GPU on D3D11.
+
 Instanced quads (glyphs, flat tiles: `QuadVS`, the instance data after the FX instances) run on all four. On D3D9 the
 instance texture is now at most 4096 texels wide: with quads after an FX row the renderer uploaded a full row of
 12288 texels, whose 16384-texel system-memory surface NVIDIA's driver refused (E_FAIL), and the device then failed

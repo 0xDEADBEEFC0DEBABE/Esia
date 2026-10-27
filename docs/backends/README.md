@@ -119,7 +119,7 @@ is the executable reference: run the conformance suite with `--backend null --ou
 | `GetTextureDesc(tex)` | Size, format, usage, samples. The renderer reads it for the target every frame. |
 | `CreateBuffer(desc)` / `UpdateBuffer(buf, data, size)` / `DestroyBuffer` | `Vertex` (20-byte `esia::Vertex`), `Index` (uint32), `FxInstances` (float4 rows, `FxStorage::Buffer` only). Updates replace the first `size` bytes, before the first pass; version them per frame in flight. |
 | `MapBuffer(buf, size)` / `UnmapBuffer(buf)` | `UpdateBuffer` written in place: the renderer writes the frame's vertices, indices and FX instances straight from the draw lists, one buffer at a time. The default stages them for `UpdateBuffer`; a backend whose buffers map hands out their memory (Direct3D 9 - 11: lock / map with discard; Direct3D 12: the buffer's copy for the ring). |
-| `CreatePipeline(desc)` | Program (vertex + pixel shader of `ShaderProgram`), vertex layout, topology, blend, target format, samples, and for `Fx`: `effect` / `effectSource` (user effects, only with `runtimeEffects`), `fxFeatures` (only with `fxFeatureVariants`) and `background` (only with `asyncPipelines`, below). May be called inside a pass. Return `{}` if the combination is impossible (a sample count the format cannot have, an effect that failed): the renderer falls back or skips - a refused FX variant is drawn with the full shader (`fxFeatures = 0`, counted in `RenderStats::fxFallbacks`). A user effect may return `{}` while it compiles in the background; the renderer asks again on a later frame. |
+| `CreatePipeline(desc)` | Program (vertex + pixel shader of `ShaderProgram`), vertex layout, topology, blend, target format, samples, and for `Fx`: `effect` / `effectSource` (user effects, only with `runtimeEffects`), `fxFeatures` (with `fxFeatureVariants`, and for batches of `fx::kVariantOnlyFeatures` where `fullFxGlyphs` is false) and `background` (only with `asyncPipelines`, below). May be called inside a pass. Return `{}` if the combination is impossible (a sample count the format cannot have, an effect that failed): the renderer falls back or skips - a refused FX variant is drawn with the full shader (`fxFeatures = 0`, counted in `RenderStats::fxFallbacks`). A user effect may return `{}` while it compiles in the background; the renderer asks again on a later frame. |
 | `GetPipelineStatus(p)` | Only with `asyncPipelines`: `Pending` while a `background` pipeline compiles, `Failed` when it could not be built, else `Ready` (the default implementation). The renderer never binds a pipeline that is not `Ready`. |
 
 ### Frames, passes, state
@@ -559,8 +559,9 @@ ctest --preset linux-clang -R esia_conformance                                  
   where a fresh device reads zeros (llvmpipe does). The null backend's goldens are single frames: it ignores it.
 * Scenes a backend cannot run are SKIPped with the reason (the headless device refused the format / samples, no
   device on this machine, `text_lcd` without `Caps::dualSourceBlend`). `text_fields` draws glyph shapes (FX
-  `ShapeKind::Glyph`, feature `kGlyph`: a distance field sampled from `gTex`); a backend whose full FX shader cannot
-  hold them sets `Caps::fullFxGlyphs = false` and builds the variants glyph batches ask for (Direct3D 9). `text_legible`
+  `ShapeKind::Glyph`, feature `kGlyph`: a distance field sampled from `gTex`); a backend whose full FX shader leaves
+  them out (every FX pixel would pay for their code) sets `Caps::fullFxGlyphs = false` and builds the variants glyph
+  batches ask for (all but Metal without function constants). `text_legible`
   adds their legibility halo (`kLegible`), which reads the captured backdrop as glass does. A missing golden is NO GOLDEN, a failure with
   `--strict`. Exit code: 1 on a failure, 77 when every scene was skipped, else 0. CMake adds, per backend,
   `esia_conformance_<name>` (`--strict`) and `esia_conformance_<name>_frames` (`--frames 3 --strict`; not for null),

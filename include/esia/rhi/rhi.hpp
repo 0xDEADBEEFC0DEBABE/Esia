@@ -281,9 +281,10 @@ namespace esia::rhi
         // 0.5 (WgtPixelPos then returns pixel centers); the backend's SM3 shader prelude moves clip-space positions
         // by half a pixel of the current target through ESIA_CLIP_POSITION (docs/backends/README.md, "Direct3D 9").
         bool halfPixelOffset = false;
-        // The full FX shader draws glyph shapes and motion blur (fx::kVariantOnlyFeatures). False (Direct3D 9: SM3 has no
-        // registers left for them): only its feature variants do - such a batch asks for its variant, built at once,
-        // whatever fxFeatureVariants says, and is not drawn if it fails.
+        // The full FX shader draws glyph shapes, legibility halos and motion blur (fx::kVariantOnlyFeatures). False on
+        // every backend that can specialize it (all but Metal without function constants): their code would cost every
+        // FX pixel registers and instructions, and SM3 has no room for it. Then only feature variants draw them - such
+        // a batch asks for its variant, built at once, whatever fxFeatureVariants says, and is not drawn if it fails.
         bool fullFxGlyphs = true;
         // Dual-source blending (BlendMode::DualSourceLcd): sub-pixel text. Without it sub-pixel glyph pages draw with
         // the grayscale coverage kept in their alpha (TextLcdGray).
