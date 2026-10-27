@@ -137,20 +137,27 @@ namespace esia::text
         // one field per glyph for every size - large and animated text without a bitmap per size, sharp under any
         // scale. 0: never (small text is better hinted and covered per pixel).
         float distanceFieldFrom = 0.0f;
+        // Text in motion - its position or scale changed since the last frame - is drawn from the design's outlines at
+        // quarter pixels both ways, smooth however slowly it moves; when it comes to rest it fades into this rendering
+        // (hinted, its baseline and maybe its pens on whole pixels) within 0.12 s (RasterParams::time; else 8 frames).
+        // Hinting keeps text at rest crisp; in motion it would make it jump from pixel to pixel. A text is followed
+        // from frame to frame by its layout and the order of its draws in the frame.
+        bool smoothMotion = false;
 
         bool operator==(const TextRendering&) const = default;
 
         // The design's outlines (the default).
         static constexpr TextRendering Design() { return {}; }
-        // Light hinting: sharper horizontals, the design's widths.
+        // Light hinting: sharper horizontals, the design's widths; smooth motion.
         static constexpr TextRendering Light()
         {
             TextRendering r;
             r.hinting = Hinting::Light;
+            r.smoothMotion = true;
             return r;
         }
         // GDI-era sharpness: the fonts' own hints in both directions (the classic interpreter), FreeType's rasterizer,
-        // hinted advances on whole pixels.
+        // hinted advances on whole pixels; smooth motion.
         static constexpr TextRendering Crisp()
         {
             TextRendering r;
@@ -158,16 +165,18 @@ namespace esia::text
             r.interpreter = TrueTypeInterpreter::V35;
             r.rasterizer = GlyphRasterizer::FreeType;
             r.hintedAdvances = true;
+            r.smoothMotion = true;
             return r;
         }
         // ClearType as DirectWrite draws it: the fonts' own hints run vertically (v40), FreeType's rasterizer, sub-pixel
-        // antialiasing for red-green-blue stripes with FreeType's default filter, the design's widths.
+        // antialiasing for red-green-blue stripes with FreeType's default filter, the design's widths; smooth motion.
         static constexpr TextRendering ClearType()
         {
             TextRendering r;
             r.hinting = Hinting::Full;
             r.rasterizer = GlyphRasterizer::FreeType;
             r.subpixel = SubpixelLayout::Rgb;
+            r.smoothMotion = true;
             return r;
         }
     };
@@ -183,7 +192,7 @@ namespace esia::text
     //   design | light | crisp | cleartype | native
     //   hinting=none|light|full|auto   interpreter=35|40   rasterizer=analytic|freetype
     //   stem-darkening[=0|1]   hinted-advances[=0|1]   subpixel=none|rgb|bgr   lcd-filter=default|light|none
-    //   distance-field=<pixels per em, 0 = never>
+    //   distance-field=<pixels per em, 0 = never>   smooth-motion[=0|1]
     // e.g. "crisp", "native,stem-darkening=0", "hinting=full,interpreter=35", "cleartype,subpixel=bgr". False (and `out`
     // unchanged) on a word it does not know, which `error` then names.
     ESIA_API bool ParseTextRendering(std::string_view spec, TextRendering& out, std::string* error = nullptr);
@@ -192,6 +201,7 @@ namespace esia::text
     struct RasterParams
     {
         float pixelsPerUnit = 1.0f;   // render-target pixels per UI unit (metrics x render scale is already in the sizes)
+        double time = -1.0;           // the frame clock, seconds (TextRendering::smoothMotion fades by it); < 0: by frames
     };
 
     class TextSystem

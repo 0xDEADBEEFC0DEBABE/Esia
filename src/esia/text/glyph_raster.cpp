@@ -204,10 +204,10 @@ namespace esia::text
             int left = 0, top = 0, width = 0, height = 0;
         };
 
-        // Pixel box of the outline shifted by `offsetX`: an empty column on the left, two on the right (the
+        // Pixel box of the outline shifted by `offset`: an empty column on the left, two on the right (the
         // accumulator writes one cell past an edge's last pixel), an empty row above and below. False when the
         // outline has no ink.
-        bool InkBox(const Outline& outline, float offsetX, PixelBox& box)
+        bool InkBox(const Outline& outline, Vec2 offset, PixelBox& box)
         {
             std::size_t points = 0;
             for (std::size_t c = 0; c < outline.ContourCount(); ++c)
@@ -215,18 +215,18 @@ namespace esia::text
             if (points < 2)
                 return false;
             const Rect b = outline.Bounds();
-            box.left = (int)std::floor(b.min.x + offsetX) - 1;
-            box.top = (int)std::floor(b.min.y) - 1;
-            box.width = (int)std::ceil(b.max.x + offsetX) + 2 - box.left;
-            box.height = (int)std::ceil(b.max.y) + 1 - box.top;
+            box.left = (int)std::floor(b.min.x + offset.x) - 1;
+            box.top = (int)std::floor(b.min.y + offset.y) - 1;
+            box.width = (int)std::ceil(b.max.x + offset.x) + 2 - box.left;
+            box.height = (int)std::ceil(b.max.y + offset.y) + 1 - box.top;
             return true;
         }
 
         // Every edge of every contour, the closing edge included, in bitmap coordinates (x times `xScale`: cells a
         // third of a pixel wide for sub-pixel coverage).
-        void Accumulate(const Outline& outline, float offsetX, const PixelBox& box, Accumulator& acc, float xScale = 1.0f)
+        void Accumulate(const Outline& outline, Vec2 offset, const PixelBox& box, Accumulator& acc, float xScale = 1.0f)
         {
-            const auto map = [&](Vec2 p) { return Vec2((p.x + offsetX - (float)box.left) * xScale, p.y - (float)box.top); };
+            const auto map = [&](Vec2 p) { return Vec2((p.x + offset.x - (float)box.left) * xScale, p.y + offset.y - (float)box.top); };
             for (std::size_t c = 0; c < outline.ContourCount(); ++c)
             {
                 const std::span<const Vec2> pts = outline.Contour(c);
@@ -236,11 +236,11 @@ namespace esia::text
         }
     }
 
-    bool RasterizeGrown(const Outline& outline, float offsetX, float radius, GlyphBitmap& out)
+    bool RasterizeGrown(const Outline& outline, Vec2 offset, float radius, GlyphBitmap& out)
     {
         out = {};
         PixelBox box;
-        if (!InkBox(outline, offsetX, box))
+        if (!InkBox(outline, offset, box))
             return true;
         radius = std::max(radius, 0.0f);
         const int grow = (int)std::ceil(radius) + 1;
@@ -251,7 +251,7 @@ namespace esia::text
         if (box.width > kMaxGlyphPixels || box.height > kMaxGlyphPixels)
             return false;
         Accumulator acc(box.width, box.height);
-        Accumulate(outline, offsetX, box, acc);
+        Accumulate(outline, offset, box, acc);
         std::vector<std::uint8_t> coverage;
         acc.Resolve(coverage);
 
@@ -259,7 +259,7 @@ namespace esia::text
         // every edge visits the pixels around it only, so the cost follows the glyph's perimeter, not its area
         const float reach = radius + 1.0f, reach2 = reach * reach;
         std::vector<float> d2((std::size_t)box.width * (std::size_t)box.height, reach2);
-        const auto map = [&](Vec2 p) { return Vec2(p.x + offsetX - (float)box.left, p.y - (float)box.top); };
+        const auto map = [&](Vec2 p) { return Vec2(p.x + offset.x - (float)box.left, p.y + offset.y - (float)box.top); };
         for (std::size_t c = 0; c < outline.ContourCount(); ++c)
         {
             const std::span<const Vec2> pts = outline.Contour(c);
@@ -296,13 +296,13 @@ namespace esia::text
         return true;
     }
 
-    bool RasterizeLcd(const Outline& outline, float offsetX, bool bgr, const std::uint16_t (&filter)[5], GlyphBitmap& out)
+    bool RasterizeLcd(const Outline& outline, Vec2 offset, bool bgr, const std::uint16_t (&filter)[5], GlyphBitmap& out)
     {
         out = {};
         out.channels = 4;
         out.lcd = true;
         PixelBox box;
-        if (!InkBox(outline, offsetX, box))
+        if (!InkBox(outline, offset, box))
             return true;
         box.left -= 1;   // the filter reaches two stripes past the ink: one more empty column on each side
         box.width += 2;
@@ -310,7 +310,7 @@ namespace esia::text
             return false;
         const int w = box.width, h = box.height, w3 = w * 3;
         Accumulator acc(w3, h);
-        Accumulate(outline, offsetX, box, acc, 3.0f);
+        Accumulate(outline, offset, box, acc, 3.0f);
         std::vector<float> stripes;
         acc.ResolveFloat(stripes);
         float k[5];
@@ -347,16 +347,16 @@ namespace esia::text
         return true;
     }
 
-    bool RasterizeGray(const Outline& outline, float offsetX, GlyphBitmap& out)
+    bool RasterizeGray(const Outline& outline, Vec2 offset, GlyphBitmap& out)
     {
         out = {};
         PixelBox box;
-        if (!InkBox(outline, offsetX, box))
+        if (!InkBox(outline, offset, box))
             return true;   // no ink (space): valid, nothing to draw
         if (box.width > kMaxGlyphPixels || box.height > kMaxGlyphPixels)
             return false;
         Accumulator acc(box.width, box.height);
-        Accumulate(outline, offsetX, box, acc);
+        Accumulate(outline, offset, box, acc);
         acc.Resolve(out.pixels);
         out.left = box.left;
         out.top = box.top;

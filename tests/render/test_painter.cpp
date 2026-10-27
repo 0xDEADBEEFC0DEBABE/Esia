@@ -533,6 +533,32 @@ ESIA_TEST(Painter, TextWithAStyleHandsItsMaterialToTheTextSystem)
     ESIA_CHECK(text.lastMaterial.flags[0] == (fx::kFill | fx::kStroke));   // no shadow, no glow
 }
 
+// Legible text: kLegible with its strength (at most 1) and radius in radii.z / .w - for a fill only, and not drawn flat
+// (nothing behind it is captured there). Under a scale the halo grows with the glyphs, as their stroke and glow do.
+ESIA_TEST(Painter, LegibleTextAsksForItsHalo)
+{
+    DrawList dl = MakeList();
+    FakeText text;
+    PainterEnv env;
+    env.text = &text;
+    Painter p(dl, env);
+    const fx::Instance& m = text.lastMaterial;
+    p.Text(Vec2(0, 0), text::FontRef{1, 10}, Style().Fill(Color::White()).Legible(0.75f, 4.0f), "ab");
+    ESIA_CHECK(m.flags[0] == (fx::kFill | fx::kLegible) && m.radii[2] == 0.75f && m.radii[3] == 4.0f);
+    p.Text(Vec2(0, 0), text::FontRef{1, 10}, Style().Fill(Color::White()).Legible(3.0f), "ab");
+    ESIA_CHECK(m.radii[2] == 1.0f && m.radii[3] == 0.0f);   // 0: the text system's radius
+    p.Text(Vec2(0, 0), text::FontRef{1, 10}, Style().Stroke(1, Color::White()).Legible(), "ab");
+    ESIA_CHECK((m.flags[0] & fx::kStroke) && !(m.flags[0] & fx::kLegible));
+    p.PushScale(Vec2(0, 0), 2.0f);
+    p.Text(Vec2(0, 0), text::FontRef{1, 10}, Style().Fill(Color::White()).Stroke(1, Color::Black()).Glow(Color::White(), 6).Legible(1.0f, 4.0f), "ab");
+    p.PopScale();
+    ESIA_CHECK(m.radii[2] == 1.0f && m.radii[3] == 8.0f && m.strokeParams[0] == 2.0f && m.glowParams[0] == 12.0f);
+    env.flat = true;
+    Painter flat(dl, env);
+    flat.Text(Vec2(0, 0), text::FontRef{1, 10}, Style().Fill(Color::White()).Legible(), "ab");
+    ESIA_CHECK(m.flags[0] == fx::kFill);
+}
+
 // A text system without distance fields draws the fill's first color, its opacity applied.
 ESIA_TEST(Painter, TextWithAStyleWithoutFieldsDrawsTheFillColor)
 {

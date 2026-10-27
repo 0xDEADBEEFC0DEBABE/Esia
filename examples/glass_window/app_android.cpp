@@ -531,7 +531,7 @@ namespace glass
             const double now = std::chrono::duration<double>(Clock::now() - start).count();
             ctx.NewFrame(fi.Params(opt.fixedDt > 0.0 ? (frame + 1) * opt.fixedDt : now));
             if (text && app.loadFonts)
-                text->NewFrame({fi.scale});
+                text->NewFrame({fi.scale, ctx.Input().Time()});
             const Clock::time_point uiStart = Clock::now();
             if (app.frame)
                 app.frame(ctx, {host->Name(), host->Adapter(), width, height, fi.scale, fps, cpuMs, &renderer.Stats()});

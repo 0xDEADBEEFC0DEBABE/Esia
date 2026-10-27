@@ -415,7 +415,14 @@ Implementations:
   `TextRendering::distanceFieldFrom` draws text of that many pixels per em and more from the fields by itself. The
   shader takes the median of R, G, B near the edge and the true distance farther out; past the field's reach (a
   quarter em) a lower bound from the glyph's ink box keeps glows fading (larger halos: glow layers). A blurred text
-  is a shadow without a fill; a blurred backdrop is glass without refraction. FreeType 2.14.3 and HarfBuzz 14.5.0 are built from pinned sources where the system has
+  is a shadow without a fill; a blurred backdrop is glass without refraction.
+  Smooth motion (`TextRendering::smoothMotion`, on in `Light`, `Crisp`, `ClearType` and `native`): the text system
+  follows a text from frame to frame by its layout and the order of its draws; while its position or scale changes it
+  is drawn from the design's outline at quarter pixels across and down (glyphs of their own in the atlas), and when it
+  stops both renderings are drawn, crossfading over 0.12 s (`RasterParams::time`, else 8 frames), into the hinted one.
+  Legibility (`Style::Legible`, feature `fx::kLegible`): glyph shapes read the captured backdrop as glass does (the
+  planner gives them a capture as blurred as the halo is wide, never level 0) and grow a soft halo of the other tone
+  under all faces where the backdrop's lightness comes within half of the fill's - full within a quarter. FreeType 2.14.3 and HarfBuzz 14.5.0 are built from pinned sources where the system has
   neither (`ESIA_TEXT_DEPS=auto|bundled|system`, `cmake/EsiaTextDeps.cmake`), so the same text system runs on
   Windows too. Right-to-left words in left-to-right text are laid out right to left, and the white space and
   punctuation around them stay where they were typed (a small part of UAX #9: neutrals between two right-to-left

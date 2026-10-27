@@ -296,7 +296,7 @@ namespace glass::apple
         fp.safeArea = safeArea;
         ctx_->NewFrame(fp);
         if (text_ && app_.loadFonts)
-            text_->NewFrame({scale});
+            text_->NewFrame({scale, fp.time});
         const Clock::time_point uiStart = Clock::now();
         if (app_.frame)
         {

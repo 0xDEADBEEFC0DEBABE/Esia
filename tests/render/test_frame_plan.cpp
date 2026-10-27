@@ -345,6 +345,42 @@ ESIA_TEST(FramePlan, PyramidLevelsAndLevelZeroFollowTheGlass)
     ESIA_CHECK(clear.ops[1].glassShape == (PxRect{40, 40, 360, 240}));
 }
 
+// Legible glyph shapes read the captured backdrop (their halo's tone follows it), as blurred as the halo is wide: the
+// pyramid's levels for its radius - the 16 px of the glass's surroundings at least -, never level 0.
+ESIA_TEST(FramePlan, LegibleTextReadsTheBlurredBackdrop)
+{
+    for (const float radius : {6.0f, 40.0f})
+    {
+        DrawList dl;
+        dl.Reset(Rect(0, 0, 400, 300));
+        Painter p(dl);
+        p.Rect(Rect(0, 0, 400, 300), Style().Fill(Color::Hex(0x336699)));
+        fx::Instance g{};
+        g.rect[0] = g.rect[1] = 100.0f;   // the text's box
+        g.rect[2] = 220.0f;
+        g.rect[3] = 140.0f;
+        g.shape2[0] = g.shape2[1] = 100.0f;   // the glyph's field
+        g.shape2[2] = g.shape2[3] = 140.0f;
+        g.uvRect[2] = g.uvRect[3] = 1.0f;
+        g.fill0[3] = g.misc[0] = 1.0f;
+        g.radii[0] = 8.0f;
+        g.radii[1] = 24.0f;
+        g.radii[2] = 1.0f;
+        g.radii[3] = radius;
+        g.shape[2] = 1.0f;
+        g.flags[0] = fx::kLegible | fx::kGlyph;
+        g.flags[2] = (std::uint32_t)fx::ShapeKind::Glyph;
+        dl.AddFx(g, 0, 7);
+        FramePlan plan;
+        plan.Build(Data({&dl}), {});
+        ESIA_CHECK(plan.anyGlass && Captures(plan) == 1);
+        const RenderOp& op = plan.ops.back();
+        ESIA_CHECK(op.type == RenderOp::FxBatch && op.glass && !op.readsLevel0 && !op.captureLevel0);
+        ESIA_CHECK(op.blurPx == std::max(radius, 16.0f) && op.captureLevels == (radius > 16.0f ? 5 : 4));
+        ESIA_CHECK(op.captureRegion.Contains(op.bounds));
+    }
+}
+
 ESIA_TEST(FramePlan, UserEffectsBuildTheWholePyramid)
 {
     DrawList dl;

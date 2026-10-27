@@ -273,6 +273,24 @@ namespace esia::text
             };
             QuadSet fill;      // Draw's
             QuadSet outline;   // DrawOutline's (TextOutline): the glyphs grown, in the outline's color
+            QuadSet moving, movingOutline;   // the same in motion (TextRendering::smoothMotion): design outlines
+
+            // Smooth motion: per draw of the layout in a frame (in order), where it was and since when it is still
+            struct Motion
+            {
+                Vec2 pos;
+                float scale = 0.0f;
+                std::uint32_t still = 0;   // frames
+                double since = 0.0;        // RasterParams::time it stopped at
+                bool seen = false;
+            };
+            struct Draws
+            {
+                std::vector<Motion> motion;
+                std::uint64_t frame = 0;   // of `count`
+                std::uint32_t count = 0;   // draws so far in that frame
+            };
+            Draws fillDraws, outlineDraws;
         };
 
         // FreeType outline (design units, y up) -> GlyphShape (field pixels, y down), curves kept
@@ -310,6 +328,10 @@ namespace esia::text
             s.shape->CubicTo(s.Map(control1), s.Map(control2), s.Map(to));
             return 0;
         }
+
+        // Smooth motion: a text still for this long is drawn fully hinted (RasterParams::time, else frames)
+        constexpr double kRestSeconds = 0.12;
+        constexpr std::uint32_t kRestFrames = 8;
 
         // Distance fields: one per glyph for every size, made at this em with these ranges (field pixels)
         constexpr float kFieldEm = 48.0f;
@@ -633,21 +655,65 @@ namespace esia::text
                     m.flags[1] = (std::uint32_t)fx::PaintKind::Solid;
                     return DrawShapes(dl, font, pos, m, 0, 0.0f, text, wrapWidth, flags, scale);
                 }
+                // in motion: the design's outlines at quarter pixels both ways; at rest: this rendering; between: both
+                const float rest = rendering_.smoothMotion ? RestWeight(layout->fillDraws, pos, scale) : 1.0f;
+                if (rest < 1.0f)
+                    DrawQuads(dl, *layout, layout->moving, font, pos, color.WithAlpha(color.a * (1.0f - rest)), scale, 0, true);
+                if (rest > 0.0f)
+                    DrawQuads(dl, *layout, layout->fill, font, pos, color.WithAlpha(color.a * rest), scale, 0, false);
+                return layout->metrics.size;
+            }
+
+            // The quads of `layout` at `pos` in one of its sets: placed again when anything they depend on changed.
+            void DrawQuads(DrawList& dl, Layout& layout, Layout::QuadSet& set, FontRef font, Vec2 pos, Color color, float scale, std::uint32_t outlineQ,
+                           bool moving)
+            {
                 const float rs = params_.pixelsPerUnit, inv = 1.0f / rs;
                 // animated scales are quantized to 1/4 px of em, so an animation does not flood the atlas
                 const float em = scale == 1.0f ? font.size * rs : std::floor(font.size * scale * rs * 4.0f + 0.5f) * 0.25f;
-                const std::uint32_t rgba = color.ToRgba8(), colorGlyphRgba = Color::White(color.a).ToRgba8();
+                const std::uint32_t rgba = color.ToRgba8(), colorGlyphRgba = outlineQ ? 0u : Color::White(color.a).ToRgba8();
                 // Glyphs are placed from the whole pixel at the origin (ox, oy) by its sub-pixel offsets (fx, fy): the
                 // same offsets, the same quads wherever the text is
                 const float ox = FloorPx(pos.x * rs), oy = FloorPx(pos.y * rs);
                 const float fx = pos.x * rs - ox, fy = pos.y * rs - oy;
                 const std::uint64_t generation = (((std::uint64_t)atlas_.Resets() << 32) | (std::uint32_t)colorAtlas_.Resets()) + 1u;
-                Layout::QuadSet& set = layout->fill;
                 if (set.generation != generation || set.em != em || set.scale != scale || set.fx != fx || set.fy != fy || set.rgba != rgba ||
-                    set.colorRgba != colorGlyphRgba)
-                    PlaceQuads(*layout, set, em, scale, fx, fy, rgba, colorGlyphRgba, generation, 0);
+                    set.colorRgba != colorGlyphRgba || set.outline != outlineQ)
+                    PlaceQuads(layout, set, em, scale, fx, fy, rgba, colorGlyphRgba, generation, outlineQ, moving);
                 EmitQuads(dl, set, ox, oy, inv);
-                return layout->metrics.size;
+            }
+
+            // Smooth motion: how much of a draw is this rendering's - 1 at rest, 0 in motion, rising while it settles.
+            // The k-th draw of a layout in a frame is taken for the k-th draw of it in the last frame.
+            float RestWeight(Layout::Draws& draws, Vec2 pos, float scale)
+            {
+                if (draws.frame != frame_)
+                {
+                    draws.frame = frame_;
+                    draws.count = 0;
+                }
+                const std::uint32_t k = draws.count++;
+                if (draws.motion.size() <= k)
+                    draws.motion.resize(k + 1);
+                Layout::Motion& m = draws.motion[k];
+                const bool moved = m.seen && (LengthSq(pos - m.pos) > 1e-8f || scale != m.scale);
+                if (!m.seen)
+                {
+                    m.still = kRestFrames;   // first seen: at rest
+                    m.since = params_.time - kRestSeconds;
+                }
+                else if (moved)
+                {
+                    m.still = 0;
+                    m.since = params_.time;
+                }
+                else if (m.still < kRestFrames)
+                    ++m.still;
+                m.pos = pos;
+                m.scale = scale;
+                m.seen = true;
+                const float t = params_.time >= 0.0 ? (float)((params_.time - m.since) / kRestSeconds) : (float)m.still / (float)kRestFrames;
+                return moved ? 0.0f : SmoothStep(0.0f, 1.0f, t);
             }
 
             Vec2 DrawShapes(DrawList& dl, FontRef font, Vec2 pos, const fx::Instance& material, EffectId effect, float weight, std::string_view text,
@@ -667,6 +733,8 @@ namespace esia::text
                     under |= fx::kGlow | (feat & fx::kHalo);
                 if ((feat & fx::kStroke) && material.strokeParams[1] >= 1.0f)
                     under |= fx::kStroke;
+                if (feat & fx::kLegible)
+                    under |= fx::kLegible;   // its halo, under every face (in the tone the fill's color decides)
                 const std::uint32_t faces = feat & ~under;
                 if (under != 0)
                     under |= feat & fx::kMask;
@@ -675,7 +743,7 @@ namespace esia::text
                 const Vec2 box = layout->metrics.size * scale;
                 for (const std::uint32_t pass : {under, faces})
                 {
-                    if ((pass & (fx::kFill | fx::kStroke | fx::kShadow | fx::kGlow | fx::kInnerGlow | fx::kGlass | fx::kCustom)) == 0)
+                    if ((pass & (fx::kFill | fx::kStroke | fx::kShadow | fx::kGlow | fx::kInnerGlow | fx::kGlass | fx::kCustom | fx::kLegible)) == 0)
                         continue;
                     for (const PlacedGlyph& g : layout->glyphs)
                     {
@@ -700,7 +768,8 @@ namespace esia::text
                         inst.uvRect[3] = s->uv1.y;
                         inst.radii[0] = kFieldDesc.range;
                         inst.radii[1] = kFieldDesc.alphaRange;
-                        inst.radii[2] = inst.radii[3] = 0.0f;
+                        inst.radii[2] = (pass & fx::kLegible) ? material.radii[2] : 0.0f;
+                        inst.radii[3] = (pass & fx::kLegible) ? (material.radii[3] > 0.0f ? material.radii[3] : font.size * scale / 6.0f) : 0.0f;
                         inst.shape[2] = 1.0f / k;
                         inst.shape[3] = weight * scale;
                         inst.flags[0] = pass | fx::kGlyph;
@@ -789,19 +858,13 @@ namespace esia::text
                 Layout* layout = GetLayout(font, text, wrapWidth, flags);
                 if (!layout)
                     return;
-                // the placement Draw uses (the same em, origin and sub-pixel offsets), the glyphs grown
-                const float rs = params_.pixelsPerUnit, inv = 1.0f / rs;
-                const float em = scale == 1.0f ? font.size * rs : std::floor(font.size * scale * rs * 4.0f + 0.5f) * 0.25f;
-                const std::uint32_t width = OutlineQ(outline.width * scale * rs);
-                const std::uint32_t rgba = outline.color.ToRgba8();
-                const float ox = FloorPx(pos.x * rs), oy = FloorPx(pos.y * rs);
-                const float fx = pos.x * rs - ox, fy = pos.y * rs - oy;
-                const std::uint64_t generation = (((std::uint64_t)atlas_.Resets() << 32) | (std::uint32_t)colorAtlas_.Resets()) + 1u;
-                Layout::QuadSet& set = layout->outline;
-                if (set.generation != generation || set.em != em || set.scale != scale || set.fx != fx || set.fy != fy || set.rgba != rgba ||
-                    set.outline != width)
-                    PlaceQuads(*layout, set, em, scale, fx, fy, rgba, 0, generation, width);
-                EmitQuads(dl, set, ox, oy, inv);
+                // the placement Draw uses (the same em, origin and sub-pixel offsets, the same motion), the glyphs grown
+                const std::uint32_t width = OutlineQ(outline.width * scale * params_.pixelsPerUnit);
+                const float rest = rendering_.smoothMotion ? RestWeight(layout->outlineDraws, pos, scale) : 1.0f;
+                if (rest < 1.0f)
+                    DrawQuads(dl, *layout, layout->movingOutline, font, pos, outline.color.WithAlpha(outline.color.a * (1.0f - rest)), scale, width, true);
+                if (rest > 0.0f)
+                    DrawQuads(dl, *layout, layout->outline, font, pos, outline.color.WithAlpha(outline.color.a * rest), scale, width, false);
             }
 
             // An outline's width in physical pixels as OutlineGlyph keys it: 1/8 px, at most 255 (31.875 px), 1 for any
@@ -812,7 +875,7 @@ namespace esia::text
             // pixel, the pen at a quarter-pixel phase; glyphs without ink or color left out.
             // An outline's set (outlineQ > 0): every glyph grown by that width (OutlineGlyph), color glyphs left out.
             void PlaceQuads(Layout& layout, Layout::QuadSet& set, float em, float scale, float fx, float fy, std::uint32_t rgba,
-                            std::uint32_t colorGlyphRgba, std::uint64_t generation, std::uint32_t outlineQ)
+                            std::uint32_t colorGlyphRgba, std::uint64_t generation, std::uint32_t outlineQ, bool moving = false)
             {
                 const float rs = params_.pixelsPerUnit;
                 const bool rgbaShown = (rgba >> 24) != 0, colorShown = (colorGlyphRgba >> 24) != 0;
@@ -829,20 +892,33 @@ namespace esia::text
                         phase = 0;
                         xi += 1.0f;
                     }
-                    if (faces_[g.face]->bitmap || wholePixelPens_)
+                    // in motion an outline's glyph moves by quarter pixels down too (from the design's outline)
+                    const bool smooth = moving && Outlined(g.face);
+                    if (faces_[g.face]->bitmap || (wholePixelPens_ && !smooth))
                     {
                         // a bitmap font's pixels on the target's, or outlines hinted in both directions for a pen on a
                         // whole pixel: whole pixels, no phases
                         xi = FloorPx(px + 0.5f);
                         phase = 0;
                     }
-                    const float yi = FloorPx(py + 0.5f);
-                    const GlyphSlot* s = Glyph(g.face, g.glyph, em, phase);
+                    float yi = FloorPx(py + 0.5f);
+                    int yPhase = -1;
+                    if (smooth)
+                    {
+                        yi = FloorPx(py);
+                        yPhase = (int)((py - yi) * 4.0f + 0.5f);
+                        if (yPhase == 4)
+                        {
+                            yPhase = 0;
+                            yi += 1.0f;
+                        }
+                    }
+                    const GlyphSlot* s = Glyph(g.face, g.glyph, em, phase, yPhase);
                     if (outlineQ > 0)
                     {
                         if (!s || s->color || !rgbaShown)
                             continue;   // a color glyph (emoji) has no outline
-                        s = OutlineGlyph(g.face, g.glyph, em, phase, outlineQ);
+                        s = OutlineGlyph(g.face, g.glyph, em, phase, outlineQ, yPhase);
                     }
                     if (!s || !s->page || s->width <= 0 || s->height <= 0 || !(s->color ? colorShown : rgbaShown))
                         continue;
@@ -1690,12 +1766,17 @@ namespace esia::text
 
             // The atlas slot of a glyph at `emPixels` (physical pixels per em) and pen phase `phase` (quarter pixels),
             // rasterized from the unhinted outline on first use.
-            const GlyphSlot* Glyph(std::uint16_t face, std::uint16_t glyph, float emPixels, int phase)
+            // A glyph at `emPixels`, its pen `phase` quarter pixels right; yPhase >= 0: a glyph in motion (smooth motion),
+            // the design's outline `yPhase` quarter pixels down too - its key has bit 30 set and the phase in bits 27 .. 28
+            // (its em capped to bits 2 .. 26).
+            const GlyphSlot* Glyph(std::uint16_t face, std::uint16_t glyph, float emPixels, int phase, int yPhase = -1)
             {
                 if (faces_[face]->bitmap)
                     return BitmapGlyph(face, glyph, emPixels, 0);
-                const std::uint64_t q = (std::uint64_t)std::min(emPixels * 16.0f + 0.5f, 134217727.0f);   // 1/16 px, 27 bits
-                const std::uint64_t key = ((std::uint64_t)face << 48) | ((std::uint64_t)glyph << 32) | (q << 2) | (std::uint64_t)(phase & 3);
+                const bool moving = yPhase >= 0;
+                const std::uint64_t q = (std::uint64_t)std::min(emPixels * 16.0f + 0.5f, moving ? 33554431.0f : 134217727.0f);   // 1/16 px, 25 / 27 bits
+                const std::uint64_t key = ((std::uint64_t)face << 48) | ((std::uint64_t)glyph << 32) |
+                                          (moving ? (1ull << 30) | ((std::uint64_t)(yPhase & 3) << 27) : 0ull) | (q << 2) | (std::uint64_t)(phase & 3);
                 if (faces_[face]->colorStrikes)
                     return ColorGlyph(face, glyph, emPixels);
                 if (faces_[face]->colorLayers)
@@ -1703,11 +1784,12 @@ namespace esia::text
                         return s;
                 if (const GlyphSlot* s = atlas_.Find(key))
                     return s;
-                const bool freetype = LoadOutline(face, glyph, (float)q / 16.0f) && rendering_.rasterizer == GlyphRasterizer::FreeType;
-                const float offsetX = 0.25f * (float)phase;
-                const bool rasterized = atlas_.Lcd() ? (freetype && RenderLcdWithFreeType(*faces_[face], phase, bitmap_)) ||
-                                                           RasterizeLcd(outline_, offsetX, rendering_.subpixel == SubpixelLayout::Bgr, LcdWeights(), bitmap_)
-                                                     : (freetype && RenderWithFreeType(*faces_[face], phase, bitmap_)) || RasterizeGray(outline_, offsetX, bitmap_);
+                const bool freetype = LoadOutline(face, glyph, (float)q / 16.0f, moving) && rendering_.rasterizer == GlyphRasterizer::FreeType;
+                const Vec2 offset(0.25f * (float)phase, 0.25f * (float)std::max(yPhase, 0));
+                const bool rasterized = atlas_.Lcd() ? (freetype && RenderLcdWithFreeType(*faces_[face], phase, std::max(yPhase, 0), bitmap_)) ||
+                                                           RasterizeLcd(outline_, offset, rendering_.subpixel == SubpixelLayout::Bgr, LcdWeights(), bitmap_)
+                                                     : (freetype && RenderWithFreeType(*faces_[face], phase, std::max(yPhase, 0), bitmap_)) ||
+                                                           RasterizeGray(outline_, offset, bitmap_);
                 if (!rasterized)
                     bitmap_ = GlyphBitmap{};   // larger than the rasterizer takes: cached as empty, not retried every frame
                 const GlyphSlot* s = atlas_.Add(key, bitmap_, outline_.Bounds());
@@ -1715,10 +1797,10 @@ namespace esia::text
             }
 
             // The glyph's outline at `emPixels` into outline_ (pixels, y down, the pen at the origin): the design's, or, with
-            // hinting or FreeType's rasterizer, FreeType's at that size (hinted as the rendering asks); no embedded
-            // bitmaps (color strikes: ColorGlyph). True when FreeType's glyph slot holds that sized outline after it (for
-            // RenderWithFreeType); a platform face's outline is always the design's.
-            bool LoadOutline(std::uint16_t face, std::uint16_t glyph, float emPixels)
+            // hinting or FreeType's rasterizer, FreeType's at that size (hinted as the rendering asks, unless `unhinted`:
+            // text in motion); no embedded bitmaps (color strikes: ColorGlyph). True when FreeType's glyph slot holds that
+            // sized outline after it (for RenderWithFreeType); a platform face's outline is always the design's.
+            bool LoadOutline(std::uint16_t face, std::uint16_t glyph, float emPixels, bool unhinted = false)
             {
                 Face& f = *faces_[face];
                 outline_.Clear();
@@ -1727,8 +1809,9 @@ namespace esia::text
                     f.platform->GlyphOutline(glyph, emPixels / f.upem, outline_);
                     return false;
                 }
-                const bool sized = rendering_.hinting != Hinting::None || rendering_.rasterizer == GlyphRasterizer::FreeType;
-                if (sized && SetSize(f, emPixels) && FT_Load_Glyph(f.ft, glyph, LoadFlags()) == 0 && f.ft->glyph->format == FT_GLYPH_FORMAT_OUTLINE)
+                const bool sized = (rendering_.hinting != Hinting::None && !unhinted) || rendering_.rasterizer == GlyphRasterizer::FreeType;
+                const FT_Int32 flags = unhinted ? FT_LOAD_NO_BITMAP | FT_LOAD_NO_HINTING : LoadFlags();
+                if (sized && SetSize(f, emPixels) && FT_Load_Glyph(f.ft, glyph, flags) == 0 && f.ft->glyph->format == FT_GLYPH_FORMAT_OUTLINE)
                 {
                     Decompose(f.ft->glyph->outline, 1.0f / 64.0f);   // 26.6 pixels
                     return true;
@@ -1836,11 +1919,11 @@ namespace esia::text
 
             // FreeType's rasterizer on the outline LoadOutline left in the face's glyph slot, moved right by the pen's
             // phase (quarter pixels): 8-bit coverage. False when it cannot (the caller rasterizes the outline itself).
-            bool RenderWithFreeType(Face& f, int phase, GlyphBitmap& out)
+            bool RenderWithFreeType(Face& f, int phase, int yPhase, GlyphBitmap& out)
             {
                 FT_GlyphSlot slot = f.ft->glyph;
-                if (phase != 0)
-                    FT_Outline_Translate(&slot->outline, 16 * phase, 0);   // 26.6: a quarter pixel is 16
+                if (phase != 0 || yPhase != 0)
+                    FT_Outline_Translate(&slot->outline, 16 * phase, -16 * yPhase);   // 26.6: a quarter pixel is 16 (y up)
                 if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL) != 0 || slot->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY)
                     return false;
                 const FT_Bitmap& b = slot->bitmap;
@@ -1861,11 +1944,11 @@ namespace esia::text
 
             // FreeType's sub-pixel rendering of that outline (its LCD filter): the stripes left to right as R G B, or
             // B G R for `Bgr` panels, and their mean in A for the grayscale fallback. False when it cannot.
-            bool RenderLcdWithFreeType(Face& f, int phase, GlyphBitmap& out)
+            bool RenderLcdWithFreeType(Face& f, int phase, int yPhase, GlyphBitmap& out)
             {
                 FT_GlyphSlot slot = f.ft->glyph;
-                if (phase != 0)
-                    FT_Outline_Translate(&slot->outline, 16 * phase, 0);
+                if (phase != 0 || yPhase != 0)
+                    FT_Outline_Translate(&slot->outline, 16 * phase, -16 * yPhase);
                 if (FT_Render_Glyph(slot, FT_RENDER_MODE_LCD) != 0 || slot->bitmap.pixel_mode != FT_PIXEL_MODE_LCD)
                     return false;
                 const FT_Bitmap& b = slot->bitmap;
@@ -1895,19 +1978,21 @@ namespace esia::text
             }
 
             // A glyph grown by an outline's width (`widthQ`, 1/8 px: OutlineQ), in the gray atlas beside the glyphs. Its
-            // key is a glyph's with bit 31 set and the width in bits 22 .. 29 (a glyph's em takes bits 2 .. 28 only up
-            // to 2^20 / 16 px, which no outline reaches: the em is capped there).
-            const GlyphSlot* OutlineGlyph(std::uint16_t face, std::uint16_t glyph, float emPixels, int phase, std::uint32_t widthQ)
+            // key has bit 31 set, the width in bits 20 .. 27, the em in bits 2 .. 19 (capped at 2^18 / 16 px), and in
+            // motion (yPhase >= 0: the design's outline, shifted down too) bit 30 and the phase in bits 28 .. 29.
+            const GlyphSlot* OutlineGlyph(std::uint16_t face, std::uint16_t glyph, float emPixels, int phase, std::uint32_t widthQ, int yPhase = -1)
             {
                 if (faces_[face]->bitmap)
                     return BitmapGlyph(face, glyph, emPixels, widthQ);
-                const std::uint64_t q = (std::uint64_t)std::min(emPixels * 16.0f + 0.5f, 1048575.0f);   // 1/16 px, 20 bits
+                const bool moving = yPhase >= 0;
+                const std::uint64_t q = (std::uint64_t)std::min(emPixels * 16.0f + 0.5f, 262143.0f);   // 1/16 px, 18 bits
                 const std::uint64_t key = ((std::uint64_t)face << 48) | ((std::uint64_t)glyph << 32) | (1ull << 31) |
-                                          ((std::uint64_t)(widthQ & 0xFF) << 22) | (q << 2) | (std::uint64_t)(phase & 3);
+                                          (moving ? (1ull << 30) | ((std::uint64_t)(yPhase & 3) << 28) : 0ull) | ((std::uint64_t)(widthQ & 0xFF) << 20) |
+                                          (q << 2) | (std::uint64_t)(phase & 3);
                 if (const GlyphSlot* s = atlas_.Find(key))
                     return s;
-                (void)LoadOutline(face, glyph, (float)q / 16.0f);
-                if (!RasterizeGrown(outline_, 0.25f * (float)phase, (float)widthQ / 8.0f, bitmap_))
+                (void)LoadOutline(face, glyph, (float)q / 16.0f, moving);
+                if (!RasterizeGrown(outline_, Vec2(0.25f * (float)phase, 0.25f * (float)std::max(yPhase, 0)), (float)widthQ / 8.0f, bitmap_))
                     bitmap_ = GlyphBitmap{};
                 const GlyphSlot* s = atlas_.Add(key, bitmap_, outline_.Bounds());
                 return s ? s : atlas_.Add(key, GlyphBitmap{}, Rect());

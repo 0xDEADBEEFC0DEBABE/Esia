@@ -104,6 +104,7 @@ namespace esia
         float custom[4] = {0, 0, 0, 0};
 
         float weight = 0.0f;                // text with this style (Painter::Text): UI units every glyph grows by
+        float legible = 0.0f, legibleRadius = 0.0f;   // ... a halo where the backdrop is too close to its fill
 
         Style& Fill(Color c) { hasFill = true; fill = Paint::Solid(c); return *this; }
         Style& Fill(const Paint& p) { hasFill = true; fill = p; return *this; }
@@ -127,6 +128,10 @@ namespace esia
         // Text drawn with this style: every glyph grown (> 0) or thinned (< 0) by `units` UI units - a weight for any
         // font, animated without a bitmap per step.
         Style& Weight(float units) { weight = units; return *this; }
+        // Text drawn with this style stays legible over whatever lies behind it: where the backdrop under a glyph is
+        // too close to its fill in lightness, a soft halo of the other tone grows around it, as strong as the contrast
+        // is missing (strength 0 .. 1; radius in UI units, 0: a sixth of the em). It reads the captured backdrop.
+        Style& Legible(float strength = 1.0f, float radius = 0.0f) { legible = strength; legibleRadius = radius; return *this; }
     };
 
     enum PolylineFlags_ : std::uint32_t

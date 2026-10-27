@@ -435,6 +435,8 @@ namespace esia::conformance
                 under |= fx::kGlow;
             if ((feat & fx::kStroke) && m.strokeParams[1] >= 1.0f)
                 under |= fx::kStroke;
+            if (feat & fx::kLegible)
+                under |= fx::kLegible;
             for (const std::uint32_t pass : {under, feat & ~under})
             {
                 if (pass == 0)
@@ -516,6 +518,31 @@ namespace esia::conformance
             // weight: thinner and bolder from the same fields
             FieldText(p, page, {0, 1}, Vec2(200, 190), 24, FieldMaterial(Color::Black()), -0.8f);
             FieldText(p, page, {0, 1}, Vec2(200, 225), 24, FieldMaterial(Color::Black()), 1.2f);
+        }
+
+        // Legible text: white and black runs across a backdrop from black to white - each gets its halo where the
+        // backdrop comes close to its own lightness, none where the contrast is ample.
+        void TextLegible(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl);
+            p.Rect(Rect(0, 0, 320, 240), Style().Fill(Paint::Linear(Color::Black(), Color::White(), 0)));
+            p.Rect(Rect(0, 160, 320, 240), Style().Fill(Color::Hex(0x808080)));
+            const FieldPage page = MakeFieldPage(f.textures);
+            for (int row = 0; row < 2; ++row)
+            {
+                fx::Instance m = FieldMaterial(row == 0 ? Color::White() : Color::Black());
+                m.flags[0] |= fx::kLegible;
+                m.radii[2] = 1.0f;
+                m.radii[3] = 6.0f;
+                FieldText(p, page, {0, 1, 2, 0, 1, 2, 0, 1}, Vec2(12, 60.0f + 70.0f * (float)row), 36, m);
+            }
+            // half strength on mid gray: both tones too close to it, a fainter halo
+            fx::Instance m = FieldMaterial(Color::Hex(0xA0A0A0));
+            m.flags[0] |= fx::kLegible;
+            m.radii[2] = 0.5f;
+            m.radii[3] = 5.0f;
+            FieldText(p, page, {2, 1, 0}, Vec2(12, 220), 30, m);
         }
 
         void EdgeFade(SceneFrame& f)
@@ -710,6 +737,9 @@ namespace esia::conformance
             lcd.needsDualSource = true;
             add("text_fields", "distance-field glyph shapes (FX): plain at three sizes, magnified, an outline and a glow under the faces, a gradient across a run, a drop shadow, weight",
                 &TextFields);
+            Scene& legible = add("text_legible", "legible glyph shapes: a halo of the other tone where the captured backdrop comes close to the text's lightness", &TextLegible);
+            legible.tolerance.channel = 10;   // the backdrop through its pyramid (as glass)
+            legible.tolerance.fraction = 0.01;
             add("edge_fade", "edge fades (per-draw constants) on SDF shapes, text and geometry inside clip rects", &EdgeFade);
             add("clipping", "nested / replacing clip rects (scissors), rounded masks, image fills with uv sub-rects, textured geometry", &Clipping);
             Scene& win = add("windows", "the UI core end to end: background list, overlapping windows (z-order, clip, layout cursor), foreground list", &Windows);

@@ -20,9 +20,9 @@
 [[vk::constant_id(0)]] const uint kEsiaFxFeatures = 0xFFFFFFFFu;
 #define ESIA_FX_FEATURES kEsiaFxFeatures
 #elif defined(ESIA_SM3)
-// SM3's 32 temporary registers hold the full shader without the glyph code: glyph batches take variants
-// (rhi::Caps::fullFxGlyphs)
-#define ESIA_FX_FEATURES (0xFFFFFFFFu & ~32768u)
+// SM3's 32 temporary registers hold the full shader without the glyph code (glyphs, their legibility halo): glyph
+// batches take variants (rhi::Caps::fullFxGlyphs)
+#define ESIA_FX_FEATURES (0xFFFFFFFFu & ~(32768u | 65536u))
 #else
 #define ESIA_FX_FEATURES 0xFFFFFFFFu
 #endif
@@ -44,6 +44,7 @@
 #define F_HALO         8192u
 #define F_CAUSTIC      16384u
 #define F_GLYPH        32768u
+#define F_LEGIBLE      65536u
 
 // Shape kinds (esia::fx::ShapeKind) and paint kinds (esia::fx::PaintKind), compared with the flags row: plain
 // literals take the type of what they are compared with (a uint on SM4+, the float SM3 emulates it with), so
@@ -233,6 +234,8 @@ FxPSIn FxVS(FxVSIn v)
         pad = max(pad, shadowParams.x * 1.6 + max(shadowParams.y, 0.0) + max(abs(shadowParams.z), abs(shadowParams.w)) + 2.0);
     if FX_HAS(feat, F_GLOW)
         pad = max(pad, glowParams.x * 1.8 + 2.0);
+    if FX_HAS(feat, F_LEGIBLE)
+        pad = max(pad, FxFetch(instance, FX_ROW_radii).w * 1.8 + 2.0);
     mn -= pad;
     mx += pad;
     if FX_HAS(feat, F_MASK)
@@ -762,6 +765,19 @@ float4 FxPS(FxPSIn i) : SV_Target
         const float x = max(d, 0.0) / r;
         const float g = exp(-x * x * 2.2) * I.glowParams.y * edgeFade;
         acc = Over(Premul(I.glow, saturate(g)), acc);
+    }
+
+    // 2b. legibility (glyph shapes): where the backdrop behind the text is too close to its fill in lightness, a soft
+    //     halo of the other tone, as strong as the contrast is missing - nothing where it is ample. The backdrop as
+    //     blurred as the halo is wide, from 4 px: blurred levels only (the planner captures no level 0 for it)
+    [branch] if FX_HAS(feat, F_LEGIBLE)
+    {
+        const float3 back = gTime.z > 0.5 ? WgtSampleBackdrop(spos * gTarget.zw, max(I.radii.w / px, 4.0)) : float3(0.5, 0.5, 0.5);
+        const float lf = Luma(I.fill0.rgb), lb = Luma(back);
+        const float need = saturate((0.5 - abs(lf - lb)) * 4.0) * I.radii.z;
+        const float x = max(d, 0.0) / max(I.radii.w, 1e-3);
+        const float tone = lf > 0.5 ? 0.0 : 1.0;
+        acc = Over(Premul(float4(tone, tone, tone, 0.85), need * exp(-x * x * 2.2)), acc);
     }
 
     // 3. liquid glass body

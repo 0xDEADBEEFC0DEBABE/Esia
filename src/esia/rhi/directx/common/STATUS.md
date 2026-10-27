@@ -194,7 +194,8 @@ FX glyph shapes (distance-field text, `fx::kGlyph`) did not fit ps_3_0's 32 temp
 (X4505). SM3's full shader now leaves the glyph code out (`ESIA_SM3` in the prelude), D3D9 reports
 `Caps::fullFxGlyphs = false`, and glyph batches build their feature variant at once, even on GPUs where variants are
 off (4096 instruction slots). On the RTX 4080 SUPER `text_fields` passes on D3D9 to the pixel of the D3D11 golden, and
-on D3D10 / 11 / 12.
+on D3D10 / 11 / 12. Their legibility halo (`fx::kLegible`) is left out of SM3's full shader too; `text_legible` passes
+on all four to the pixel.
 
 ### Sub-pixel text back (2026-10-28)
 

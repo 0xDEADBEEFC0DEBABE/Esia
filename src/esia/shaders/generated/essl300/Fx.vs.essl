@@ -10,10 +10,11 @@ const uint _178 = (2u & kEsiaFxFeatures);
 const uint _193 = (4u & kEsiaFxFeatures);
 const uint _198 = (256u & kEsiaFxFeatures);
 const uint _227 = (8u & kEsiaFxFeatures);
-const uint _249 = (1024u & kEsiaFxFeatures);
-const uint _275 = (8192u & kEsiaFxFeatures);
-const uint _279 = (4u & kEsiaFxFeatures);
-const uint _283 = (256u & kEsiaFxFeatures);
+const uint _241 = (65536u & kEsiaFxFeatures);
+const uint _265 = (1024u & kEsiaFxFeatures);
+const uint _291 = (8192u & kEsiaFxFeatures);
+const uint _295 = (4u & kEsiaFxFeatures);
+const uint _299 = (256u & kEsiaFxFeatures);
 
 layout(std140) uniform WgtFrame
 {
@@ -45,115 +46,125 @@ flat out uvec4 esia_v7;
 
 void main()
 {
-    uint _508 = uint(gl_InstanceID) + uint(_88.gDrawInfo.x);
-    uint _717 = max(uint(_29.gConv.z), 1u);
-    vec4 _751 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int((_508 % _717) * 24u), int(_508 / _717), 0).xy, 0);
-    uint _758 = max(uint(_29.gConv.z), 1u);
-    vec4 _792 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _758) * 24u) + 6u), int(_508 / _758), 0).xy, 0);
-    uint _799 = max(uint(_29.gConv.z), 1u);
-    vec4 _833 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _799) * 24u) + 8u), int(_508 / _799), 0).xy, 0);
-    uint _840 = max(uint(_29.gConv.z), 1u);
-    uint _881 = max(uint(_29.gConv.z), 1u);
-    vec4 _915 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _881) * 24u) + 15u), int(_508 / _881), 0).xy, 0);
-    uint _922 = max(uint(_29.gConv.z), 1u);
-    uvec4 _523 = uvec4(texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _922) * 24u) + 23u), int(_508 / _922), 0).xy, 0));
-    uint _525 = _523.x;
-    vec2 _527 = _751.xy;
-    vec2 _529 = _751.zw;
-    vec2 _1297;
-    vec2 _1302;
-    if ((_525 & _149) != 0u)
+    uint _526 = uint(gl_InstanceID) + uint(_88.gDrawInfo.x);
+    uint _747 = max(uint(_29.gConv.z), 1u);
+    vec4 _781 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int((_526 % _747) * 24u), int(_526 / _747), 0).xy, 0);
+    uint _788 = max(uint(_29.gConv.z), 1u);
+    vec4 _822 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _788) * 24u) + 6u), int(_526 / _788), 0).xy, 0);
+    uint _829 = max(uint(_29.gConv.z), 1u);
+    vec4 _863 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _829) * 24u) + 8u), int(_526 / _829), 0).xy, 0);
+    uint _870 = max(uint(_29.gConv.z), 1u);
+    uint _911 = max(uint(_29.gConv.z), 1u);
+    vec4 _945 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _911) * 24u) + 15u), int(_526 / _911), 0).xy, 0);
+    uint _952 = max(uint(_29.gConv.z), 1u);
+    uvec4 _541 = uvec4(texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _952) * 24u) + 23u), int(_526 / _952), 0).xy, 0));
+    uint _543 = _541.x;
+    vec2 _545 = _781.xy;
+    vec2 _547 = _781.zw;
+    vec2 _1370;
+    vec2 _1376;
+    if ((_543 & _149) != 0u)
     {
-        _1302 = max(_529, _915.zw);
-        _1297 = min(_527, _915.xy);
+        _1376 = max(_547, _945.zw);
+        _1370 = min(_545, _945.xy);
     }
     else
     {
-        _1302 = _529;
-        _1297 = _527;
+        _1376 = _547;
+        _1370 = _545;
     }
-    vec2 _1296;
-    vec2 _1301;
-    if ((_525 & _165) != 0u)
+    vec2 _1369;
+    vec2 _1375;
+    if ((_543 & _165) != 0u)
     {
-        _1301 = _915.zw;
-        _1296 = _915.xy;
+        _1375 = _945.zw;
+        _1369 = _945.xy;
     }
     else
     {
-        _1301 = _1302;
-        _1296 = _1297;
+        _1375 = _1376;
+        _1369 = _1370;
     }
-    float _1290;
-    if ((_525 & _178) != 0u)
+    float _1361;
+    if ((_543 & _178) != 0u)
     {
-        _1290 = max(2.0, (_792.x * _792.y) + 2.0);
+        _1361 = max(2.0, (_822.x * _822.y) + 2.0);
     }
     else
     {
-        _1290 = 2.0;
+        _1361 = 2.0;
     }
-    float _1291;
-    if (((_525 & _193) != 0u) && (!((_525 & _198) != 0u)))
+    float _1362;
+    if (((_543 & _193) != 0u) && (!((_543 & _198) != 0u)))
     {
-        _1291 = max(_1290, (((_833.x * 1.60000002384185791015625) + max(_833.y, 0.0)) + max(abs(_833.z), abs(_833.w))) + 2.0);
+        _1362 = max(_1361, (((_863.x * 1.60000002384185791015625) + max(_863.y, 0.0)) + max(abs(_863.z), abs(_863.w))) + 2.0);
     }
     else
     {
-        _1291 = _1290;
+        _1362 = _1361;
     }
-    float _1292;
-    if ((_525 & _227) != 0u)
+    float _1363;
+    if ((_543 & _227) != 0u)
     {
-        _1292 = max(_1291, (texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _840) * 24u) + 10u), int(_508 / _840), 0).xy, 0).x * 1.7999999523162841796875) + 2.0);
+        _1363 = max(_1362, (texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _870) * 24u) + 10u), int(_526 / _870), 0).xy, 0).x * 1.7999999523162841796875) + 2.0);
     }
     else
     {
-        _1292 = _1291;
+        _1363 = _1362;
     }
-    vec2 _607 = _1296 - vec2(_1292);
-    vec2 _611 = _1301 + vec2(_1292);
-    vec2 _1303;
-    vec2 _1304;
-    if ((_525 & _249) != 0u)
+    float _1364;
+    if ((_543 & _241) != 0u)
     {
-        uint _963 = max(uint(_29.gConv.z), 1u);
-        vec4 _997 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _963) * 24u) + 19u), int(_508 / _963), 0).xy, 0);
-        _1304 = min(_611, _997.zw + vec2(1.0));
-        _1303 = max(_607, _997.xy - vec2(1.0));
+        uint _993 = max(uint(_29.gConv.z), 1u);
+        _1364 = max(_1363, (texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _993) * 24u) + 1u), int(_526 / _993), 0).xy, 0).w * 1.7999999523162841796875) + 2.0);
     }
     else
     {
-        _1304 = _611;
-        _1303 = _607;
+        _1364 = _1363;
     }
-    vec2 _1305;
-    vec2 _1306;
-    if (((_525 & _275) != 0u) && (!(((_525 & _279) != 0u) && (!((_525 & _283) != 0u)))))
+    vec2 _637 = _1369 - vec2(_1364);
+    vec2 _641 = _1375 + vec2(_1364);
+    vec2 _1377;
+    vec2 _1378;
+    if ((_543 & _265) != 0u)
     {
-        uint _1004 = max(uint(_29.gConv.z), 1u);
-        vec4 _1038 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _1004) * 24u) + 22u), int(_508 / _1004), 0).xy, 0);
-        _1306 = max(_1303, _1038.xy - vec2(1.0));
-        _1305 = min(_1304, _1038.zw + vec2(1.0));
+        uint _1034 = max(uint(_29.gConv.z), 1u);
+        vec4 _1068 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _1034) * 24u) + 19u), int(_526 / _1034), 0).xy, 0);
+        _1378 = min(_641, _1068.zw + vec2(1.0));
+        _1377 = max(_637, _1068.xy - vec2(1.0));
     }
     else
     {
-        _1306 = _1303;
-        _1305 = _1304;
+        _1378 = _641;
+        _1377 = _637;
     }
-    vec2 _678 = vec2(((uint(gl_VertexID) & 1u) != 0u) ? _1305.x : _1306.x, ((uint(gl_VertexID) & 2u) != 0u) ? _1305.y : _1306.y);
-    uint _1045 = max(uint(_29.gConv.z), 1u);
-    uint _1086 = max(uint(_29.gConv.z), 1u);
-    uint _1127 = max(uint(_29.gConv.z), 1u);
-    uint _1168 = max(uint(_29.gConv.z), 1u);
-    gl_Position = vec4((_678 * _29.gXform.xy) + _29.gXform.zw, 0.0, 1.0);
-    esia_v0 = _678;
-    esia_v1 = _508;
-    esia_v2 = _751;
-    esia_v3 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _1045) * 24u) + 1u), int(_508 / _1045), 0).xy, 0);
-    esia_v4 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _1086) * 24u) + 2u), int(_508 / _1086), 0).xy, 0);
-    esia_v5 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _1127) * 24u) + 14u), int(_508 / _1127), 0).xy, 0);
-    esia_v6 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_508 % _1168) * 24u) + 17u), int(_508 / _1168), 0).xy, 0);
-    esia_v7 = _523;
+    vec2 _1379;
+    vec2 _1380;
+    if (((_543 & _291) != 0u) && (!(((_543 & _295) != 0u) && (!((_543 & _299) != 0u)))))
+    {
+        uint _1075 = max(uint(_29.gConv.z), 1u);
+        vec4 _1109 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _1075) * 24u) + 22u), int(_526 / _1075), 0).xy, 0);
+        _1380 = max(_1377, _1109.xy - vec2(1.0));
+        _1379 = min(_1378, _1109.zw + vec2(1.0));
+    }
+    else
+    {
+        _1380 = _1377;
+        _1379 = _1378;
+    }
+    vec2 _708 = vec2(((uint(gl_VertexID) & 1u) != 0u) ? _1379.x : _1380.x, ((uint(gl_VertexID) & 2u) != 0u) ? _1379.y : _1380.y);
+    uint _1116 = max(uint(_29.gConv.z), 1u);
+    uint _1157 = max(uint(_29.gConv.z), 1u);
+    uint _1198 = max(uint(_29.gConv.z), 1u);
+    uint _1239 = max(uint(_29.gConv.z), 1u);
+    gl_Position = vec4((_708 * _29.gXform.xy) + _29.gXform.zw, 0.0, 1.0);
+    esia_v0 = _708;
+    esia_v1 = _526;
+    esia_v2 = _781;
+    esia_v3 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _1116) * 24u) + 1u), int(_526 / _1116), 0).xy, 0);
+    esia_v4 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _1157) * 24u) + 2u), int(_526 / _1157), 0).xy, 0);
+    esia_v5 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _1198) * 24u) + 14u), int(_526 / _1198), 0).xy, 0);
+    esia_v6 = texelFetch(SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler, ivec3(int(((_526 % _1239) * 24u) + 17u), int(_526 / _1239), 0).xy, 0);
+    esia_v7 = _541;
 }
 

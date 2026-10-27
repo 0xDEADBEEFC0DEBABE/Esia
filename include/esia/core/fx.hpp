@@ -37,6 +37,10 @@ namespace esia::fx
         // a glyph's distance field (with ShapeKind::Glyph): the glyph code of the shaders is a feature, so variants of
         // other batches leave it out (and SM3's full shader, which has no room for it)
         kGlyph       = 1u << 15,
+        // glyph shapes: where the backdrop under the text is too close to its fill in lightness, a soft halo of the
+        // other tone (radii.z strength 0 .. 1, radii.w radius in UI units) - none where the contrast is ample. Reads
+        // the captured backdrop, as glass does.
+        kLegible     = 1u << 16,
     };
 
     // Glyph: a glyph's distance field (MTSDF, text/distance_field.hpp) on the instance's texture - shape2 = the field's

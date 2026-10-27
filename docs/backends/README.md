@@ -549,7 +549,8 @@ ctest --preset linux-clang -R esia_conformance                                  
 * Scenes a backend cannot run are SKIPped with the reason (the headless device refused the format / samples, no
   device on this machine, `text_lcd` without `Caps::dualSourceBlend`). `text_fields` draws glyph shapes (FX
   `ShapeKind::Glyph`, feature `kGlyph`: a distance field sampled from `gTex`); a backend whose full FX shader cannot
-  hold them sets `Caps::fullFxGlyphs = false` and builds the variants glyph batches ask for (Direct3D 9). A missing golden is NO GOLDEN, a failure with
+  hold them sets `Caps::fullFxGlyphs = false` and builds the variants glyph batches ask for (Direct3D 9). `text_legible`
+  adds their legibility halo (`kLegible`), which reads the captured backdrop as glass does. A missing golden is NO GOLDEN, a failure with
   `--strict`. Exit code: 1 on a failure, 77 when every scene was skipped, else 0. CMake adds, per backend,
   `esia_conformance_<name>` (`--strict`) and `esia_conformance_<name>_frames` (`--frames 3 --strict`; not for null),
   both with `SKIP_RETURN_CODE 77`: a machine without the backend shows them as skipped, never as passed.

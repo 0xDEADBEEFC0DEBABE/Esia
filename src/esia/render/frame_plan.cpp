@@ -46,6 +46,8 @@ namespace esia::render
                                         std::max(std::fabs(in.shadowParams[2]), std::fabs(in.shadowParams[3])) + 2.0f);
             if (feat & fx::kGlow)
                 pad = std::max(pad, in.glowParams[0] * 1.8f + 2.0f);
+            if (feat & fx::kLegible)
+                pad = std::max(pad, in.radii[3] * 1.8f + 2.0f);
             x0 -= pad;
             y0 -= pad;
             x1 += pad;
@@ -80,6 +82,8 @@ namespace esia::render
                 if (peak > 0.04f)
                     pad = std::max(pad, in.glowParams[0] * std::sqrt(std::log(peak / 0.04f) / 2.2f));
             }
+            if ((feat & fx::kLegible) && in.radii[2] * 0.85f > 0.04f)   // the legibility halo, at its strongest
+                pad = std::max(pad, in.radii[3] * std::sqrt(std::log(in.radii[2] * 0.85f / 0.04f) / 2.2f));
             return pad;
         }
 
@@ -327,8 +331,8 @@ namespace esia::render
                         // the shape plus the part of its shadow / glow that is still visible (> 4%): the faint outer
                         // tails vanish through blurred glass, so they never force a new backdrop capture
                         const PxRect shapeR = map(ShapeBox(in));
-                        // glass and user effects (which may call WgtBackdrop()) read the captured backdrop
-                        const bool glass = (in.flags[0] & (fx::kGlass | fx::kCustom)) != 0;
+                        // glass, user effects (which may call WgtBackdrop()) and legible text read the captured backdrop
+                        const bool glass = (in.flags[0] & (fx::kGlass | fx::kCustom | fx::kLegible)) != 0;
                         // Liquid glass shapes are tracked apart from other content: like SwiftUI's glass effect
                         // container, neighbouring glass shares one backdrop and only sees glass it sits on.
                         const bool glassShape = (in.flags[0] & fx::kGlass) && !(in.flags[0] & fx::kCustom);
@@ -345,7 +349,8 @@ namespace esia::render
                         {
                             const float glassBlurPx = std::max(in.glass[0], kGlassEnvBlur) * map.scale.x;
                             const float ambientPx = in.shape[0] > 0.0f ? (float)(1 << AmbientLevel(map.scale.x)) : 0.0f;
-                            blurPx = (in.flags[0] & fx::kCustom) ? -1.0f : std::max(glassBlurPx, ambientPx);
+                            const float legiblePx = (in.flags[0] & fx::kLegible) ? in.radii[3] * map.scale.x : 0.0f;   // as blurred as its halo is wide
+                            blurPx = (in.flags[0] & fx::kCustom) ? -1.0f : std::max({glassBlurPx, ambientPx, legiblePx});
                             // WgtSampleBackdrop reads level 0 below a 4 px frost (the rim reflection and the exposure
                             // always read blurred levels)
                             reads0 = (in.flags[0] & fx::kCustom) || ((in.flags[0] & fx::kGlass) && in.glass[0] * map.scale.x < 4.0f);
@@ -353,7 +358,8 @@ namespace esia::render
                             // frost footprint, plus the rim reflection sampled just outside the edge (GlassEnvReach)
                             const float halfMin = 0.5f * std::min(in.rect[2] - in.rect[0], in.rect[3] - in.rect[1]);
                             const float reach = in.glass[0] * 2.0f + GlassEnvReach(std::min(in.glass[2], std::max(halfMin, 1.0f))) + kGlassEnvBlur;
-                            const float margin = (isGlass ? reach : 40.0f) * map.scale.x + 16.0f;
+                            const float wide = (in.flags[0] & fx::kLegible) ? std::max(40.0f, in.radii[3] * 2.0f) : 40.0f;   // a wide halo's blur
+                            const float margin = (isGlass ? reach : wide) * map.scale.x + 16.0f;
                             gRegion = map(in.rect[0], in.rect[1], in.rect[2], in.rect[3]).Expand(margin);
                             // what glass shows of its backdrop is what lies under the shape (refraction pulls inwards):
                             // content drawn beside it after the capture would reach its frost only faintly, so it does

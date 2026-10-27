@@ -42,6 +42,9 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**Smooth text motion, legible text** (2026-10-28, in Esia): moving text drawn unhinted at quarter pixels, settling
+into its hinting when it stops; a halo of the other tone where the backdrop comes close to a glyph shape's color.
+
 **Distance-field text** (2026-10-28, in Esia): Esia's own MTSDF generator (overlapping contours resolved, sharp
 corners), glyphs as FX shapes with every Painter material (`Painter::Text` with a `Style`: outlines, glows,
 shadows, gradients, glass, weight) on every backend, large text from fields by itself.
@@ -105,6 +108,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Smooth motion and legible text](#smooth-motion-and-legible-text)
 * [Distance-field text](#distance-field-text)
 * [Sub-pixel text](#sub-pixel-text)
 * [FreeType's rendering](#freetypes-rendering)
@@ -136,6 +140,47 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Smooth motion and legible text
+
+Two of the text ideas the owner picked: hinted text that moves without jumping from pixel to pixel, and text that
+stays legible over whatever lies behind it.
+
+### What changed
+
+* Smooth motion (`TextRendering::smoothMotion`; on in `Light`, `Crisp`, `ClearType` and `native`; parser
+  `smooth-motion[=0|1]`): the FreeType text system follows each text from frame to frame by its layout and the order
+  of its draws in the frame. A text whose position or scale changed is drawn from the design's outline, unhinted, at
+  quarter pixels across and down (glyphs keyed apart in the atlas); once it stops, its moving and hinted quads are
+  drawn together, their alphas crossfading over 0.12 s (`RasterParams::time`; 8 frames without a clock), then the
+  hinted ones alone. Outlines (`DrawOutline`) follow the same rule. `RasterizeGray` / `RasterizeGrown` /
+  `RasterizeLcd` take a 2D offset; the examples hand the frame's time to `NewFrame`.
+* Legibility (`Style::Legible(strength, radius)`, feature `fx::kLegible`): `Painter::Text` with a fill asks for it
+  (not when drawing flat); the text system puts it in the outer pass, under all faces, with its radius (by default a
+  sixth of the em). The FX shader reads the captured backdrop at the pixel, as blurred as the halo is wide (4 px at
+  least), and draws a halo of the other tone (black for light text, white for dark) as strong as the lightness
+  contrast is missing: full within a quarter, none beyond a half. The planner treats it as a backdrop reader (a
+  capture, the pyramid's levels for its radius, never level 0); Direct3D 9's full shader leaves it to the glyph
+  variants.
+* Painter: under `PushScale` a text's stroke, shadow, glows, glass and halo now scale with its glyphs (they kept their
+  unscaled size).
+
+### Verified
+
+* The text system: moving text drawn from glyphs of its own, both renderings while it settles (alphas adding up to
+  255), hinted again after 8 frames or 0.12 s; the ink moving by quarter pixels down (whole pixels without smooth
+  motion); the halo under the faces with the default and a given radius. The Painter: the halo's strength and
+  radius, none without a fill or when flat, scaled with the glyphs. The planner: a capture, a blur of 16 px or the
+  halo's radius, no level 0.
+* The conformance scene `text_legible` (white and black glyph shapes over a black-to-white gradient, a gray run on
+  gray): D3D9, D3D10, D3D11, D3D12, OpenGL, GLES and Vulkan equal to the D3D11 golden; ctest 36 / 36.
+
+### Not done
+
+* The halo's tone is decided per pixel from the blurred backdrop: over detail finer than the halo it is even, not one
+  per detail.
+* Smooth motion follows texts by their order of drawing: a text drawn in another order next frame counts as moved
+  (it settles again within 0.12 s).
 
 ## Distance-field text
 

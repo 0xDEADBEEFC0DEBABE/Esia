@@ -22,6 +22,7 @@ namespace esia::text
         r.hinting = Hinting::Full;
         r.interpreter = TrueTypeInterpreter::V40;
         r.rasterizer = GlyphRasterizer::FreeType;
+        r.smoothMotion = true;
         // the user's font smoothing (Control Panel, the ClearType tuner): ClearType in its stripe order, else grayscale
         BOOL smoothing = FALSE;
         UINT type = 0, order = FE_FONTSMOOTHINGORIENTATIONRGB;
@@ -38,6 +39,7 @@ namespace esia::text
         r.hinting = Hinting::Light;
         r.rasterizer = GlyphRasterizer::FreeType;
         r.stemDarkening = true;
+        r.smoothMotion = true;
 #endif
         return r;
     }
@@ -125,6 +127,8 @@ namespace esia::text
                 ok = Flag(value, r.stemDarkening);
             else if (name == "hinted-advances")
                 ok = Flag(value, r.hintedAdvances);
+            else if (name == "smooth-motion")
+                ok = Flag(value, r.smoothMotion);
             else if (name == "subpixel")
             {
                 if (value == "none")

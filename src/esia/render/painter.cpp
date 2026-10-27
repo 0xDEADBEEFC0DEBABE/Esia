@@ -17,6 +17,19 @@ namespace esia
 
         inline Vec2 ScalePoint(Vec2 p, Vec2 o, float s) { return Vec2(o.x + (p.x - o.x) * s, o.y + (p.y - o.y) * s); }
 
+        // The material's lengths under a scale: the stroke's width, the shadow, the glows' radii, the glass's blur and
+        // refraction.
+        void ScaleLengths(fx::Instance& inst, float k)
+        {
+            inst.strokeParams[0] *= k;
+            for (float& v : inst.shadowParams)
+                v *= k;
+            inst.glowParams[0] *= k;
+            inst.glowParams[2] *= k;
+            inst.glass[1] *= k;
+            inst.glass[2] *= k;
+        }
+
         // The path Polyline / Area follow: the points (minus repeats), or a smooth curve through them sampled every
         // few pixels. Monotone cubic (Fritsch-Carlson) when x keeps increasing, so a chart never overshoots its
         // data; Catmull-Rom otherwise.
@@ -750,15 +763,7 @@ namespace esia
             }
             for (float& r : inst.radii)
                 r *= k;
-            inst.strokeParams[0] *= k;
-            inst.shadowParams[0] *= k;
-            inst.shadowParams[1] *= k;
-            inst.shadowParams[2] *= k;
-            inst.shadowParams[3] *= k;
-            inst.glowParams[0] *= k;
-            inst.glowParams[2] *= k;
-            inst.glass[1] *= k;
-            inst.glass[2] *= k;
+            ScaleLengths(inst, k);
         }
     }
 
@@ -852,13 +857,20 @@ namespace esia
         std::memset(&m, 0, sizeof(m));
         Style plain = s;
         plain.image = 0;   // the glyph's field takes the image's uv rect
-        const std::uint32_t feat = Material(plain, flatGlass, flatFill, m) & ~fx::kImage;
+        std::uint32_t feat = Material(plain, flatGlass, flatFill, m) & ~fx::kImage;
         if ((feat & (fx::kFill | fx::kStroke | fx::kShadow | fx::kGlow | fx::kInnerGlow | fx::kGlass | fx::kCustom)) == 0 || m.misc[0] <= 0.0f)
             return env_.text->Measure(font, text, wrapWidth, flags).size;
+        if (s.legible > 0.0f && (feat & fx::kFill) && !env_.flat)
+        {
+            feat |= fx::kLegible;
+            m.radii[2] = Saturate(s.legible);
+            m.radii[3] = std::max(s.legibleRadius, 0.0f);   // 0: the text system's (a sixth of the em)
+        }
         m.flags[0] = feat;
         if (scaleDepth_ > 0)
         {
-            // under PushScale: drawn at the final (scaled) geometry; PopScale skips it (the fields need no new bitmaps)
+            // under PushScale: drawn at the final (scaled) geometry, the material's lengths with it; PopScale skips it
+            // (the fields need no new bitmaps)
             float k = 1.0f;
             Vec2 at = pos;
             for (int i = scaleDepth_ - 1; i >= 0; --i)
@@ -866,6 +878,8 @@ namespace esia
                 at = ScalePoint(at, scaleOrigin_[i], scaleValue_[i]);
                 k *= scaleValue_[i];
             }
+            ScaleLengths(m, k);
+            m.radii[3] *= k;   // the legibility halo's radius (radii.z is its strength)
             const std::size_t start = dl_->Vertices().size();
             const Vec2 size = env_.text->DrawShapes(*dl_, font, at, m, s.effect, s.weight, text, wrapWidth, flags, k);
             ExcludeFromScale(start);

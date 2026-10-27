@@ -142,6 +142,9 @@ ESIA_TEST(TextRendering, ParsesPresetsAndSettings)
     ESIA_CHECK(text::ParseTextRendering("subpixel=none,lcd-filter=none", r) && r.subpixel == text::SubpixelLayout::None &&
                r.lcdFilter == text::LcdFilter::None);
     ESIA_CHECK(!text::ParseTextRendering("subpixel=vrgb", r) && !text::ParseTextRendering("lcd-filter=legacy", r));
+    ESIA_CHECK(text::ParseTextRendering("design,smooth-motion", r) && r.smoothMotion && r.hinting == text::Hinting::None);
+    ESIA_CHECK(text::ParseTextRendering("crisp,smooth-motion=0,distance-field=40", r) && !r.smoothMotion && r.distanceFieldFrom == 40.0f);
+    ESIA_CHECK(!text::ParseTextRendering("distance-field=big", r));
     // a word it does not know: false, `out` unchanged, the word named
     const text::TextRendering before = r;
     std::string error;
@@ -468,6 +471,33 @@ ESIA_TEST(FreeTypeRendering, DrawShapesMakesGlyphShapes)
     std::printf("  %zu distance fields in %.2f ms (%.3f ms each)\n", n, ms, ms / (double)n);
 }
 
+// Legible glyph shapes: the halo under the faces, with the material's strength and radius (by default a sixth of the
+// em at the size drawn); the faces without it.
+ESIA_TEST(FreeTypeRendering, LegibleShapesPutTheirHaloUnderTheFaces)
+{
+    Fixture f;
+    fx::Instance m;
+    std::memset(&m, 0, sizeof(m));
+    m.fill0[0] = m.fill0[1] = m.fill0[2] = m.fill0[3] = 1.0f;
+    m.misc[0] = 1.0f;
+    m.radii[2] = 0.5f;
+    m.flags[0] = fx::kFill | fx::kLegible;
+    for (const float radius : {0.0f, 5.0f})
+    {
+        m.radii[3] = radius;
+        DrawList dl = NewList();
+        f.ts->DrawShapes(dl, {f.droid, 36.0f}, Vec2(0, 0), m, 0, 0.0f, "Esia", 0.0f, 0, 2.0f);
+        const std::vector<fx::Instance>& in = dl.FxInstances();
+        ESIA_CHECK(in.size() == 8);
+        for (std::size_t i = 0; i < in.size(); ++i)
+        {
+            const bool halo = i < in.size() / 2;
+            ESIA_CHECK(in[i].flags[0] == ((halo ? fx::kLegible : fx::kFill) | fx::kGlyph));
+            ESIA_CHECK(in[i].radii[2] == (halo ? 0.5f : 0.0f) && in[i].radii[3] == (halo ? (radius > 0.0f ? 5.0f : 12.0f) : 0.0f));
+        }
+    }
+}
+
 // Large text draws from the fields by itself (TextRendering::distanceFieldFrom); smaller text stays coverage quads.
 ESIA_TEST(FreeTypeRendering, LargeTextDrawsFromFields)
 {
@@ -486,6 +516,109 @@ ESIA_TEST(FreeTypeRendering, LargeTextDrawsFromFields)
     DrawList dense = NewList();
     f.ts->Draw(dense, {f.droid, 24.0f}, Vec2(0, 0), Color::White(), "Esia");
     ESIA_CHECK(dense.FxInstances().size() == 4);
+}
+
+namespace
+{
+    int AlphaOf(const Quad& q) { return (int)std::lround(Color::FromRgba8(q.color).a * 255.0f); }
+
+    // the ink's vertical center of a text drawn in black (Composite over white)
+    float InkCenterY(Fixture& f, const DrawList& dl)
+    {
+        f.pages.Collect(f.textures);
+        const testkit::Image img = Composite(dl, f.pages, 160, 64);
+        double sum = 0.0, weighted = 0.0;
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 160; ++x)
+            {
+                const double ink = 255.0 - img.At(x, y)[0];
+                sum += ink;
+                weighted += ink * ((double)y + 0.5);
+            }
+        return sum > 0.0 ? (float)(weighted / sum) : 0.0f;
+    }
+}
+
+// Smooth motion: a text that moves is drawn from the design's outlines; when it stops it fades into the hinted rendering
+// (8 frames without a clock): both sets of quads, their alphas adding up, then the hinted ones alone.
+ESIA_TEST(FreeTypeRendering, MovingTextComesToRestHinted)
+{
+    const text::TextRendering crisp = text::TextRendering::Crisp();
+    ESIA_CHECK(crisp.smoothMotion && text::TextRendering::Light().smoothMotion && !text::TextRendering::Design().smoothMotion);
+    Fixture f(crisp);
+    const auto frame = [&](Vec2 pos) {
+        f.ts->NewFrame({1.0f});
+        DrawList dl = NewList();
+        f.ts->Draw(dl, {f.droid, 13.0f}, pos, Color::Black(), "Waffle");
+        return Quads(dl);
+    };
+    const std::vector<Quad> rest = frame(Vec2(10.0f, 20.0f));   // first seen: at rest, hinted
+    ESIA_CHECK(!rest.empty());
+    for (const Quad& q : rest)
+        ESIA_CHECK(AlphaOf(q) == 255);
+    const std::vector<Quad> moving = frame(Vec2(10.5f, 20.25f));
+    ESIA_CHECK(moving.size() == rest.size());
+    int otherBitmaps = 0;
+    for (std::size_t i = 0; i < moving.size(); ++i)
+    {
+        ESIA_CHECK(AlphaOf(moving[i]) == 255);
+        otherBitmaps += !(moving[i].uv0 == rest[i].uv0);
+    }
+    ESIA_CHECK(otherBitmaps == (int)moving.size());   // the design's outlines: glyphs of their own
+    const std::vector<Quad> settling = frame(Vec2(10.5f, 20.25f));
+    ESIA_CHECK(settling.size() == 2 * rest.size());
+    const std::size_t n = rest.size();
+    for (std::size_t i = 0; i < n && settling.size() == 2 * n; ++i)
+    {
+        ESIA_CHECK(AlphaOf(settling[i]) > 128 && AlphaOf(settling[n + i]) < 128);   // mostly still the moving one
+        ESIA_CHECK(std::abs(AlphaOf(settling[i]) + AlphaOf(settling[n + i]) - 255) <= 2);
+    }
+    std::vector<Quad> settled;
+    for (int i = 0; i < 8; ++i)
+        settled = frame(Vec2(10.5f, 20.25f));
+    ESIA_CHECK(settled.size() == n);
+    for (const Quad& q : settled)
+        ESIA_CHECK(AlphaOf(q) == 255);
+    // the clock, when given: 0.12 s
+    f.ts->NewFrame({1.0f, 10.0});
+    DrawList dl = NewList();
+    f.ts->Draw(dl, {f.droid, 13.0f}, Vec2(30, 20), Color::Black(), "Waffle");   // moved
+    f.ts->NewFrame({1.0f, 10.06});
+    dl = NewList();
+    f.ts->Draw(dl, {f.droid, 13.0f}, Vec2(30, 20), Color::Black(), "Waffle");
+    ESIA_CHECK(Quads(dl).size() == 2 * n);   // half way
+    f.ts->NewFrame({1.0f, 10.13});
+    dl = NewList();
+    f.ts->Draw(dl, {f.droid, 13.0f}, Vec2(30, 20), Color::Black(), "Waffle");
+    ESIA_CHECK(Quads(dl).size() == n);
+}
+
+// In motion the ink moves by a quarter pixel when the text does, down as across (at rest the baseline stays on a whole
+// pixel); without smooth motion the text keeps to whole pixels down.
+ESIA_TEST(FreeTypeRendering, MovingTextMovesByQuarterPixels)
+{
+    for (const bool smooth : {true, false})
+    {
+        text::TextRendering r = text::TextRendering::Light();
+        r.smoothMotion = smooth;
+        Fixture f(r);
+        float last = 0.0f;
+        for (int i = 0; i <= 5; ++i)
+        {
+            f.ts->NewFrame({1.0f});
+            DrawList dl = NewList();
+            f.ts->Draw(dl, {f.droid, 13.0f}, Vec2(10.0f, 20.0f + 0.25f * (float)i), Color::Black(), "Waffle");
+            const float y = InkCenterY(f, dl);
+            if (i >= 2)
+            {
+                if (smooth)
+                    ESIA_CHECK(std::fabs(y - last - 0.25f) < 0.06f);
+                else
+                    ESIA_CHECK(std::fabs(y - last) < 0.01f || std::fabs(y - last - 1.0f) < 0.05f);   // whole pixels
+            }
+            last = y;
+        }
+    }
 }
 
 ESIA_TEST(FreeTypeRendering, RendersTheCrispGoldenImage)
