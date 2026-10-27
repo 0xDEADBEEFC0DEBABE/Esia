@@ -182,7 +182,8 @@ brightness, and blends with an HDR scene under it.
 
 ### Verified
 
-* `esia_hdr_tests` on every backend built in (D3D9 / 10 / 11 / 12, OpenGL, GLES, Vulkan; Metal on macOS CI): opaque
+* `esia_hdr_tests` on every backend built in (D3D9 / 10 / 11 / 12, OpenGL, GLES, Vulkan; Metal on macOS CI), a ctest per
+  backend (`esia_hdr_<backend>`; the Windows runner leaves out WARP's D3D9 and lavapipe, docs/CI.md): opaque
   sRGB grays 0 / 0.25 / 0.5 / 1 come out of an scRGB and a PQ target as the transfer functions computed on the CPU say
   (8-bit readback, within 2); a half-transparent white over the last frame's gray reads that gray back and blends to
   sRGB 0.75, and the pixels outside the second frame's region are the first frame's to the bit.

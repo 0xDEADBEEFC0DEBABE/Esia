@@ -56,15 +56,29 @@ namespace
 
     bool Near(int got, int want, int tolerance = 2) { return std::abs(got - want) <= tolerance; }
 
-    // The devices to run on: every backend built in that makes a headless device of the format, reads back and has float
-    // render targets.
+    // The devices the tests ran on in this process. With none (no device of the backend on this machine) the line at
+    // exit makes CTest report the test as skipped (SKIP_REGULAR_EXPRESSION), not passed, as the conformance suite's
+    // exit code 77 does.
+    struct DevicesRun
+    {
+        int count = 0;
+        ~DevicesRun()
+        {
+            if (count == 0)
+                std::printf("esia_hdr: no device ran\n");
+        }
+    } gDevicesRun;
+
+    // The devices to run on: every backend built in (or the one ESIA_HDR_BACKEND names: CTest runs a test per backend)
+    // that makes a headless device of the format, reads back and has float render targets.
     template <class F>
     void ForEachDevice(rhi::Format format, const char* what, F&& f)
     {
         rhi::RegisterBuiltinBackends();
+        const char* only = std::getenv("ESIA_HDR_BACKEND");
         for (const rhi::BackendInfo& b : rhi::Backends())
         {
-            if (std::string(b.name) == "null" || !b.createHeadless)
+            if (std::string(b.name) == "null" || !b.createHeadless || (only && *only && std::string(b.name) != only))
                 continue;
             rhi::HeadlessDesc hd;
             hd.width = kW;
@@ -77,6 +91,7 @@ namespace
                 std::printf("  %s %s: skipped (%s)\n", b.name, what, dev.device ? "no readback or float targets" : error.c_str());
                 continue;
             }
+            ++gDevicesRun.count;
             f(b.name, dev);
         }
     }
