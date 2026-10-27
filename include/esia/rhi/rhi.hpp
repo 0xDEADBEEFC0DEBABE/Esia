@@ -235,6 +235,12 @@ namespace esia::rhi
         // non-zero number share one slot - a host that renders several targets per frame (one Renderer::Render
         // each) passes the same number to each of them; 0 = every BeginFrame is a frame of its own.
         std::uint64_t hostFrame = 0;
+        // The host's fence for the work recorded into nativeContext (Direct3D 12: ID3D12Fence*) and the value it signals
+        // once that work has executed - the list this frame went into. With it a backend recycles the frame's slot when
+        // the fence has reached the value, not on trust `framesInFlight` frames later (esia/rhi/d3d12.hpp: the
+        // submission contracts). Ignored by the other backends for now.
+        void* nativeFence = nullptr;
+        std::uint64_t nativeFenceValue = 0;
     };
 
     // GPU time per category (non-blocking timestamps, read a few frames later).
