@@ -125,17 +125,28 @@ namespace esia
 
     void DrawList::AddRectFilled(const Rect& r, std::uint32_t color) { AddRectFilledUV(r, Vec2(0, 0), Vec2(1, 1), color); }
 
-    DrawCmd& DrawList::QuadCommand(TextureId tex)
+    DrawCmd& DrawList::QuadCommand(TextureId tex, bool shape)
     {
         if (cmds_.size() > mergeBarrier_)
         {
             DrawCmd& last = cmds_.back();
-            if (last.kind == DrawCmdKind::Quads && last.texture == tex && last.clip == clipStack_.back() &&
-                last.first + last.count == (std::uint32_t)quads_.size())
-                return last;
+            if (last.kind == DrawCmdKind::Quads && last.clip == clipStack_.back() && last.first + last.count == (std::uint32_t)quads_.size())
+            {
+                // a shape reads no texture: it joins quads on any; textured quads join shapes alone and give them theirs
+                if (shape)
+                    return last;
+                if (last.texture == tex || last.anyTexture)
+                {
+                    last.texture = tex;
+                    last.anyTexture = false;
+                    return last;
+                }
+            }
             if (last.kind == DrawCmdKind::Quads && last.count == 0)
             {
                 last.texture = tex;
+                last.anyTexture = shape;
+                last.shapes = false;
                 last.clip = clipStack_.back();
                 last.first = (std::uint32_t)quads_.size();
                 last.vtxBounds = DrawCmd().vtxBounds;
@@ -144,6 +155,7 @@ namespace esia
         }
         DrawCmd& c = Push(DrawCmdKind::Quads);
         c.texture = tex;
+        c.anyTexture = shape;
         c.first = (std::uint32_t)quads_.size();
         return c;
     }
@@ -178,6 +190,28 @@ namespace esia
         QuadWriter w = BeginQuads(texture, 1);
         w.Add(r, uv0, uv1, color);
         EndQuads(w);
+    }
+
+    void DrawList::AddShapeQuad(const QuadInstance& shape, const Rect& bounds)
+    {
+        if (shape.Alpha() == 0)
+            return;
+        DrawCmd& c = QuadCommand(0, true);
+        quads_.push_back(shape);
+        ++c.count;
+        c.shapes = true;
+        c.vtxBounds = c.vtxBounds.Union(bounds);
+    }
+
+    void DrawList::AddShapeQuads(const QuadInstance* shapes, std::size_t count, const Rect& bounds)
+    {
+        if (count == 0 || shapes[0].Alpha() == 0)
+            return;
+        DrawCmd& c = QuadCommand(0, true);
+        quads_.insert(quads_.end(), shapes, shapes + count);
+        c.count += (std::uint32_t)count;
+        c.shapes = true;
+        c.vtxBounds = c.vtxBounds.Union(bounds);
     }
 
     DrawList::PrimWriter DrawList::PrimReserve(std::uint32_t indexCount, std::uint32_t vertexCount)
@@ -228,7 +262,7 @@ namespace esia
             else if (c.kind == DrawCmdKind::Quads && c.first + c.count > fromQuad)
             {
                 for (std::uint32_t q = c.first; q < c.first + c.count; ++q)
-                    b = b.Union(Rect(quads_[q].rect[0], quads_[q].rect[1], quads_[q].rect[2], quads_[q].rect[3]));
+                    b = b.Union(quads_[q].Bounds());
             }
             else
                 continue;

@@ -690,6 +690,10 @@ namespace esia
             if (kind == fx::ShapeKind::RoundRect && solidPaint && !(extra && mergeSmooth_ >= 0.0f) && FlatGeometry(bounds, s, flatFill, radii, smoothing))
                 return;
         }
+        // a plain shape: quads drawn with the text
+        if (env_.quadShapes && !flatGlass && (kind == fx::ShapeKind::Segment || (kind == fx::ShapeKind::RoundRect && !(extra && mergeSmooth_ >= 0.0f))) &&
+            QuadShapes(kind, bounds, s, kind == fx::ShapeKind::Segment ? extra : nullptr, radii, smoothing))
+            return;
 
         fx::Instance inst;
         std::memset(&inst, 0, sizeof(inst));
@@ -775,6 +779,58 @@ namespace esia
             return false;
 
         Emit(inst, s.effect, s.image);
+        return true;
+    }
+
+    bool Painter::QuadShapes(fx::ShapeKind kind, const esia::Rect& bounds, const Style& s, const float* ends, const float* radii, float smoothing)
+    {
+        // What only an FX instance draws (as Material makes it): another paint than a solid one, an image, glass, a
+        // shadow, a glow, grain, shimmer, motion blur, a user effect, a mask, a scale (FX instances take it as they
+        // are made, quads when it is popped), a stroke that fades, corners of different radii
+        const bool flat = env_.flat;
+        if (maskDepth_ > 0 || scaleDepth_ > 0 || s.hasGlass || s.image != 0 || s.effect != 0 || (s.hasFill && s.fill.kind != fx::PaintKind::Solid))
+            return false;
+        if (!flat && ((s.shadowColor.a > 0.0f && (s.shadowBlur > 0.0f || s.shadowSpread != 0.0f || s.shadowOffset.x != 0.0f || s.shadowOffset.y != 0.0f)) ||
+                      (s.glowColor.a > 0.0f && ((s.glowRadius > 0.0f && s.glowIntensity > 0.0f) || (s.innerGlowRadius > 0.0f && s.innerGlowIntensity > 0.0f))) ||
+                      s.noise > 0.0f || s.shimmer > 0.0f || s.motion.x != 0.0f || s.motion.y != 0.0f))
+            return false;
+        // (and what a quad cannot carry: smoothing or a stroke's align beyond 0 .. 1, a stroke 1024 units wide)
+        const bool stroke = s.strokeWidth > 0.0f && s.strokeColor.a > 0.0f;
+        if ((stroke && (s.strokeFadeTo < 0.999f || s.strokeWidth >= 1024.0f || s.strokeAlign < 0.0f || s.strokeAlign > 1.0f)) || smoothing < 0.0f || smoothing > 1.0f ||
+            (kind == fx::ShapeKind::RoundRect && !(radii[0] == radii[1] && radii[1] == radii[2] && radii[2] == radii[3])))
+            return false;
+        const float opacity = Saturate(s.opacity * alpha_);
+        Color fill = s.hasFill ? s.fill.a : Color::Clear(), line = stroke ? s.strokeColor : Color::Clear();
+        fill.a *= opacity;
+        line.a *= opacity;
+        const std::uint32_t fillRgba = fill.ToRgba8(), lineRgba = line.ToRgba8();
+        const bool drawFill = (fillRgba >> 24) != 0, drawLine = (lineRgba >> 24) != 0;
+        // The FX shader puts the stroke over the fill and fades the two together: two quads blend each on its own, which
+        // is the same only at full opacity
+        if (drawFill && drawLine && opacity < 1.0f)
+            return false;
+        if (!drawFill && !drawLine)
+            return true;
+        // coarse culling against the clip rect (Submit's)
+        const float pad = 2.0f + (drawLine ? std::max(s.strokeWidth * s.strokeAlign, 0.0f) : 0.0f);
+        const esia::Rect& clip = dl_->ClipRect();
+        if (bounds.max.x + pad < clip.min.x || bounds.max.y + pad < clip.min.y || bounds.min.x - pad > clip.max.x || bounds.min.y - pad > clip.max.y)
+            return true;
+        // (a segment's bounds hold its thickness already: what its quads draw on, and the stroke's outside part)
+        const bool segment = kind == fx::ShapeKind::Segment;
+        const esia::Rect r = segment ? esia::Rect(Vec2(ends[0], ends[1]), Vec2(ends[2], ends[3])) : bounds;
+        QuadInstance q;
+        if (drawFill)
+        {
+            q.SetShape(segment ? QuadShape::SegmentFill : QuadShape::Fill, r, radii[0], smoothing, 0.0f, 0.0f, fillRgba);
+            dl_->AddShapeQuad(q, bounds);
+        }
+        if (drawLine)
+        {
+            q.SetShape(segment ? QuadShape::SegmentStroke : QuadShape::Stroke, r, radii[0], smoothing, s.strokeWidth, s.strokeAlign, lineRgba);
+            const float out = s.strokeWidth * s.strokeAlign;
+            dl_->AddShapeQuad(q, esia::Rect(bounds.min.x - out, bounds.min.y - out, bounds.max.x + out, bounds.max.y + out));
+        }
         return true;
     }
 
@@ -1361,7 +1417,7 @@ namespace esia
         }
         c.a *= alpha_;
         if (c.a > 0.0f)
-            dl_->AddRectFilled(r, c.ToRgba8());
+            SolidRect(r, c.ToRgba8());
     }
 
     void Painter::HLine(float x0, float x1, float y, Color c, float thickness)
@@ -1373,7 +1429,97 @@ namespace esia
         const float rs = Pixel();
         const float y0 = std::floor(y * rs) / rs;
         const float h = std::max(1.0f, std::floor(thickness * rs + 0.5f)) / rs;
-        dl_->AddRectFilled(esia::Rect(x0, y0, x1, y0 + h), c.ToRgba8());
+        SolidRect(esia::Rect(x0, y0, x1, y0 + h), c.ToRgba8());
+    }
+
+    void Painter::SolidRect(const esia::Rect& r, std::uint32_t rgba)
+    {
+        if (!env_.quadShapes)
+        {
+            dl_->AddRectFilled(r, rgba);
+            return;
+        }
+        // a quad drawn with the text, over the pixels the geometry's two triangles would cover
+        if (r.Empty())
+            return;
+        QuadInstance q;
+        q.SetShape(QuadShape::Solid, r, 0.0f, 0.0f, 0.0f, 0.0f, rgba);
+        dl_->AddShapeQuad(q, r);
+    }
+
+    bool Painter::LineQuads(const std::vector<Vec2>& path, float hw, float outer, int sides, std::uint32_t rgba)
+    {
+        // The geometry (Polyline) puts a rung of vertices across every point - along the segment's normal at the ends,
+        // along the miter between - and fills between the rungs with triangles: the color's alpha flat inside, falling
+        // to 0 over the pixel at the edges. A piece's quad (QuadShape::LinePiece) ends on the lines of the same rungs, as
+        // far along them as the farthest miter reaches, and the two quads of a joint compute those corners from the same
+        // numbers (the point, the line's direction in 16 bits, the reach): they share that edge exactly, and the
+        // rasterizer gives every pixel on it to one of them, as it does the triangles - a translucent line is blended
+        // once. The shader gives each pixel the triangles' alpha (esia_quad.hlsl); an end's quad (LineCap) its fan's.
+        // Not where the geometry clips a miter (a turn sharper than 120 degrees: that rung leaves the miter's line), nor
+        // where a piece is too short for its joints' lines (they would cross inside its quad).
+        const int n = (int)path.size();
+        thread_local std::vector<Vec2> tJointDir;
+        thread_local std::vector<std::uint32_t> tJointCode;
+        thread_local QuadVector tLineQuads;
+        std::vector<Vec2>& dir = tJointDir;
+        std::vector<std::uint32_t>& code = tJointCode;
+        dir.resize((std::size_t)n);
+        code.resize((std::size_t)n);
+        // the joints' lines: the segment's unit normal (the geometry's, (-dy, dx)) at an end, the normals' bisector
+        // between - |a + b| is twice the cosine of half the turn, the miter's reach its inverse
+        float narrowest = 1.0f;
+        Vec2 prev(0, 0), lo = path[0], hi = path[0];
+        for (int i = 0; i < n; ++i)
+        {
+            const Vec2 p = path[(std::size_t)i];
+            lo = Vec2(std::min(lo.x, p.x), std::min(lo.y, p.y));
+            hi = Vec2(std::max(hi.x, p.x), std::max(hi.y, p.y));
+            Vec2 b = prev;
+            if (i + 1 < n)
+            {
+                const Vec2 d = path[(std::size_t)i + 1] - p;
+                const float l2 = LengthSq(d);
+                if (!(l2 > 0.0f))
+                    return false;
+                const float inv = 1.0f / std::sqrt(l2);
+                b = Vec2(-d.y * inv, d.x * inv);
+            }
+            Vec2 m = b;
+            if (i > 0 && i + 1 < n)
+            {
+                const float h = 0.5f * (1.0f + Dot(prev, b));   // the cosine of half the turn, squared
+                if (!(h >= 0.25f))
+                    return false;   // a turn sharper than 120 degrees: the geometry clips its miter
+                const float c = std::sqrt(h);
+                narrowest = std::min(narrowest, c);
+                m = (prev + b) * (0.5f / c);
+            }
+            dir[(std::size_t)i] = m;
+            code[(std::size_t)i] = QuadInstance::LineDirection(m);
+            prev = b;
+        }
+        const std::uint32_t reach = (std::uint32_t)std::ceil((1.0f / narrowest - 1.0f) * 16.0f);
+        const float r = outer * (1.0f + (float)reach / 16.0f);
+        // each piece's far line clear of its quad's near corners and the near line of the far ones, by a margin for the
+        // directions' steps
+        auto cross = [](Vec2 u, Vec2 v) { return std::fabs(u.x * v.y - u.y * v.x); };
+        QuadVector& quads = tLineQuads;
+        quads.resize((std::size_t)n + 1);
+        for (int i = 0; i + 1 < n; ++i)
+        {
+            const Vec2 u0 = dir[(std::size_t)i], u1 = dir[(std::size_t)i + 1];
+            const Vec2 a = path[(std::size_t)i], b = path[(std::size_t)i + 1], d = b - a;
+            const float turn = cross(u0, u1) * r, margin = (std::fabs(d.x) + std::fabs(d.y) + r) * 1e-3f;
+            if (!(cross(u0, d) - turn > margin && cross(u1, d) - turn > margin))
+                return false;
+            quads[(std::size_t)i].SetLinePiece(a, b, hw, code[(std::size_t)i], code[(std::size_t)i + 1], reach, rgba);
+        }
+        quads[(std::size_t)n - 1].SetLineCap(path[0], path[1], hw, code[0], reach, (std::uint32_t)sides, rgba);
+        quads[(std::size_t)n].SetLineCap(path[(std::size_t)n - 1], path[(std::size_t)n - 2], hw, code[(std::size_t)n - 1], reach, (std::uint32_t)sides, rgba);
+        const float e = hw * (1.0f + (float)reach / 16.0f);   // as far as the pieces' Bounds go
+        dl_->AddShapeQuads(quads.data(), quads.size(), esia::Rect(lo.x - e, lo.y - e, hi.x + e, hi.y + e));
+        return true;
     }
 
     void Painter::Polyline(const Vec2* points, int count, float thickness, const Style& s, std::uint32_t flags)
@@ -1430,6 +1576,12 @@ namespace esia
         const std::uint32_t cIn = col.ToRgba8(), cOut = Color(col.r, col.g, col.b, 0.0f).ToRgba8();
         const Vec2 uv(0, 0);
         const int capSeg = (int)Clamp(std::ceil(hw * rs * 1.2f), 3.0f, 12.0f);
+        if (env_.quadShapes && scaleDepth_ == 0 && maskDepth_ == 0 && LineQuads(path, hw, outer, capSeg, cIn))
+        {
+            if (glow)
+                EndGlowLayer();
+            return;
+        }
         const std::uint32_t vtxCount = (std::uint32_t)(n * 4 + 2 * (1 + 2 * (capSeg + 1)));
         const std::uint32_t idxCount = (std::uint32_t)((n - 1) * 18 + 2 * (capSeg * 9));
         const std::uint32_t base = dl_->PrimBegin(idxCount, vtxCount);

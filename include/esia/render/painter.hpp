@@ -178,6 +178,14 @@ namespace esia
         // They batch with the text around them: a frame of plain widgets is a few draws of flat geometry.
         bool flat = false;
         Color flatSurface = Color(0.11f, 0.11f, 0.12f, 1.0f);
+        // Plain shapes - a solid fill and / or a solid stroke on a rectangle with one radius on every corner, a circle, a
+        // capsule or a segment, with no other material, outside masks and scales - as quads drawn with the text
+        // (QuadInstance shapes): the same pixels from 32 bytes instead of an FX instance's 384, and many shapes among
+        // many labels in few draws, whatever order they come in. FillRect's and HLine's rectangles too, as quads over the
+        // pixels their geometry covered (no antialiasing), and Polyline's lines, a quad per segment and per end with
+        // their geometry's pixels and antialiasing. false: every shape an FX instance, those rectangles and lines
+        // geometry.
+        bool quadShapes = true;
         // An outline under every text and icon this Painter draws (text::TextOutline; none by default).
         text::TextOutline textOutline;
     };
@@ -247,6 +255,8 @@ namespace esia
         float SnapToPixel(float v) const;
 
         // ---------------------------------------------------- cheap primitives (indexed geometry)
+        // A rectangle's pixels, without antialiasing (rounded, or under a mask or a scale: an SDF shape); a quad drawn
+        // with the text (PainterEnv::quadShapes), else geometry.
         void FillRect(const esia::Rect& r, Color c, float rounding = 0.0f);
         // A hairline on physical pixel rows (crisp at any DPI / render scale).
         void HLine(float x0, float x1, float y, Color c, float thickness = 1.0f);
@@ -254,7 +264,8 @@ namespace esia
         // the physical pixel. Color: s.fill's color (s.opacity applies). Glows only if `s` has a glow, as one halo.
         // With a material geometry cannot draw - glass, a shadow, an inner glow, a stroke around the line, a gradient,
         // an image, shimmer, noise, a user effect, motion blur - the line is an FX path instead (round joins), with
-        // all of them.
+        // all of them. Quads drawn with the text, the same pixels (PainterEnv::quadShapes), unless a turn is sharper
+        // than 120 degrees or a segment too short for the turns at its ends, under a scale or a mask.
         void Polyline(const Vec2* points, int count, float thickness, const Style& s, std::uint32_t flags = PolylineFlags_None);
         // Fills between the same path and the horizontal line y = `baseline` (area charts). Solid or linear paint.
         void Area(const Vec2* points, int count, float baseline, const Paint& paint, std::uint32_t flags = PolylineFlags_None);
@@ -320,6 +331,14 @@ namespace esia
         // its core: colors with their opacity applied
         bool FlatShape(const esia::Rect& bounds, Color fill, Color stroke, float strokeWidth, float strokeAlign, const float* shapeRadii,
                        float smoothing);
+        // A plain shape as quads drawn with the text (PainterEnv::quadShapes; true: drawn, or nothing to draw). `ends`: a
+        // segment's end points (bounds: its box).
+        bool QuadShapes(fx::ShapeKind kind, const esia::Rect& bounds, const Style& s, const float* ends, const float* radii, float smoothing);
+        // FillRect's and HLine's rectangle without antialiasing: a QuadShape::Solid quad, or geometry without quadShapes
+        void SolidRect(const esia::Rect& r, std::uint32_t rgba);
+        // Polyline's line through `path` as quads drawn with the text (PainterEnv::quadShapes): its geometry's pixels
+        // and coverage (false: the geometry draws it - a miter it clips, a piece too short for its joints)
+        bool LineQuads(const std::vector<Vec2>& path, float hw, float outer, int sides, std::uint32_t rgba);
         void ApplyScale(fx::Instance& inst) const;
         void ExcludeFromScale(std::size_t vtxStart, std::size_t quadStart);
         float Pixel() const { return env_.pixelScale > 0.0f ? env_.pixelScale : 1.0f; }
