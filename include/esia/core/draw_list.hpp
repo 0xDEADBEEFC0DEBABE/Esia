@@ -141,9 +141,13 @@ namespace esia
         // chart turn either way at random).
         static float LineDirectionCode(Vec2 v)
         {
+            // (a statement each: no compiler fuses the product and the sum - every level of the polyline loops computes
+            // this alike, render/line_kernels.cpp)
             const float s = (v.x < 0.0f ? -v.x : v.x) + (v.y < 0.0f ? -v.y : v.y);
             const float p = v.x / (s > 1e-30f ? s : 1e-30f);
-            const float steps = ((1.0f - (v.y < 0.0f ? -p : p)) * 32768.0f + 12582912.0f) - 12582912.0f;   // rounded: 1.5 2^23, whole floats
+            const float t = 1.0f - (v.y < 0.0f ? -p : p);
+            const float scaled = t * 32768.0f;
+            const float steps = (scaled + 12582912.0f) - 12582912.0f;   // rounded: 1.5 2^23, whole floats
             return steps >= 65536.0f ? steps - 65536.0f : steps;
         }
         bool IsShape() const { return packed[0] < 0.0f; }
@@ -295,6 +299,9 @@ namespace esia
         // Shapes of one color in one go (a polyline's pieces and ends), `bounds` holding all of them; nothing for a
         // transparent color.
         void AddShapeQuads(const QuadInstance* shapes, std::size_t count, const Rect& bounds);
+        // ... written in place: room for `count` shapes at the end of the quads, in a command that draws them, for the
+        // caller to fill - every one of them, in a color that is not transparent.
+        QuadInstance* AppendShapeQuads(std::size_t count, const Rect& bounds);
         // Room for `vertexCount` vertices and `indexCount` indices written in place (the indices count from `base`),
         // then PrimCommit with their bounds: what WriteVertex / WriteIndex do one at a time. The current clip and
         // texture; nothing else may be added in between.

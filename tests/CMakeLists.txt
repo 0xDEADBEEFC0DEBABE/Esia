@@ -3,6 +3,7 @@
 
 esia_add_test(esia_core_tests
     core/test_hash.cpp
+    core/test_cpu.cpp
     core/test_draw_list.cpp
     core/test_texture.cpp
     core/test_input.cpp

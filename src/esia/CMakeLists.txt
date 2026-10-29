@@ -65,6 +65,7 @@ endfunction()
 # ------------------------------------------------------------------ core
 add_library(esia_core STATIC
     core/context.cpp
+    core/cpu.cpp
     core/debug.cpp
     core/items.cpp
     core/layout.cpp
@@ -81,10 +82,13 @@ add_library(esia::core ALIAS esia_core)
 # ------------------------------------------------------------------ renderer
 add_library(esia_render STATIC
     render/painter.cpp
+    render/line_kernels.cpp
     render/frame_plan.cpp
     render/renderer.cpp)
 target_link_libraries(esia_render PUBLIC esia_core esia_rhi)
 esia_target_defaults(esia_render)
+# every level of a polyline's loops computes the same bits: no fused multiply-adds (clang and MSVC: a pragma in the file)
+set_source_files_properties(render/line_kernels.cpp PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU>:-ffp-contract=off>")
 add_library(esia::render ALIAS esia_render)
 
 # ------------------------------------------------------------------ text

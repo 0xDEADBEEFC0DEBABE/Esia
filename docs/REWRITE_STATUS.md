@@ -42,6 +42,10 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**Polylines on the processor's vectors** (2026-10-30, in Esia): a polyline's loops on AVX-512, AVX2, SSE2 or NEON, chosen
+at run time, every level with the same bits; long dense series in 0.039 ms of CPU on AVX-512 (plain C++ 0.150, Dear
+ImGui 1.92.9b 0.084).
+
 **Render-class cost, round 2: much content on screen** (2026-10-30, in Esia): plain shapes - a solid fill or stroke
 on a rounded rectangle, a circle, a capsule, a segment - and polylines are 32-byte quads drawn in the draws of the text
 around them, with the pixels they had; shapes and labels overlapping one another are one draw (a thousand overlapping
@@ -137,6 +141,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Polylines on the processor's vectors](#polylines-on-the-processors-vectors)
 * [Render-class cost, round 2: much content on screen](#render-class-cost-round-2-much-content-on-screen)
 * [Glass on every shape](#glass-on-every-shape)
 * [Render-class cost, round 1](#render-class-cost-round-1)
@@ -175,6 +180,57 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Polylines on the processor's vectors
+
+The loops that make a polyline's quads run on the widest vector instructions the processor has (2026-10-30): AVX-512,
+AVX2 or SSE2 on x86-64, NEON on AArch64, plain C++ elsewhere - chosen at run time, not at build time, so one binary uses
+what each machine runs.
+
+### What changed
+
+* `esia::cpu` (`include/esia/core/cpu.hpp`): the level a processor runs - cpuid and the register state the operating
+  system saves (`xgetbv`) on x86, NEON on AArch64 - detected once; `ESIA_SIMD` (`scalar`, `sse2`, `avx2`, `avx512`, `neon`)
+  or `cpu::Force` run a lower one (tests, benchmarks).
+* `render/line_kernels.cpp`: Painter::LineQuads' loops - the segments' normals and the bounds, the joints' directions and
+  the sharpest turn, the check that each piece clears its joints' lines, the pieces' quads - for every level. AVX2 and
+  AVX-512 code is compiled with the compilers' target attributes in the same file (MSVC needs none), so the library is
+  built for the baseline and still runs the wide code where it exists. A level hands what is left over to the next
+  narrower one (AVX-512 to AVX2 to SSE2 to plain C++).
+* Every level writes the same bits: the same IEEE operations in the same order, exact square roots and divisions (no
+  reciprocal estimates, which differ between Intel and AMD and between SSE and AVX-512), no fused multiply-adds
+  (contraction off for the file). `Painter.PolylineKernelsAgree` draws lines of every length (the vector loops' tails),
+  turn and width at whole and fractional scales, and long dense series, on every level the processor runs, and compares
+  quads, geometry and bounds with plain C++'s byte for byte.
+* The pieces go straight into the draw list (`DrawList::AppendShapeQuads`). The check that a piece clears its joints'
+  lines - which a long dense series (a point every pixel or two) ran piece by piece in plain C++ - is on the vectors too.
+* Also: the quad shapes' antialiasing no longer takes derivatives - fxc had moved them into a branch, and WARP and Mesa
+  gave one pixel of a thin line other values -, and the dense scene's pair allows 3 levels where its translucent lines
+  meet and a pixel is blended a dozen times over (llvmpipe; 2 everywhere else).
+
+### Verified
+
+* Every test on Windows (clang-cl Debug, `-DESIA_WERROR=ON`): 41 / 41; MSVC `/W4 /WX` and the GNU flags on the new files;
+  the kernels' test on SSE2, AVX2 and AVX-512 here (a Ryzen 9 7950X), NEON by the macOS CI. The polylines scenes on
+  Direct3D 11 at every level: within 1 level of their geometry, as before. WARP (Direct3D 10 / 11 / 12): every scene.
+
+### Measured
+
+rcbench (round 1's benchmark), Direct3D 11, CPU ms (build + submit), medians of 5 alternated runs; `ESIA_SIMD` picks the
+level in one binary:
+
+| scene | plain C++ | SSE2 | AVX2 | AVX-512 | Dear ImGui 1.92.9b | 1.93.0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 200 polylines of 64 points, 2 px | 0.082 | 0.046 | 0.043 | 0.043 | 0.085 | 0.100 |
+| 8 series of 1 601 points (a point every pixel or two), 2 px | 0.150 | 0.054 | 0.040 | 0.039 | 0.084 | 0.099 |
+
+GPU time 0.028 and 0.021 ms (Dear ImGui 0.043 and 0.041). The round before (one loop a point, its reciprocal square roots
+estimated) took 0.087 ms for the first scene. On a Zen 4 AVX-512 runs as two halves: it equals AVX2 here.
+
+### Not done
+
+* Text: labels at new sub-pixel offsets every frame still build in 1.7 times Dear ImGui's time unless drawn on whole
+  pixels (round 2); their per-glyph work is lookups more than arithmetic.
 
 ## Render-class cost, round 2: much content on screen
 

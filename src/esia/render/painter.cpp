@@ -2,14 +2,12 @@
 // Ported from WGT's src/render/painter.cpp; the instance encoding must stay identical (the shaders read it).
 #include "esia/render/painter.hpp"
 #include "esia/text/glyph_atlas.hpp"
+#include "line_kernels.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <optional>
-#if defined(_M_X64) || defined(__SSE__)
-#include <xmmintrin.h>   // RSqrt
-#endif
 
 namespace esia
 {
@@ -145,18 +143,6 @@ namespace esia
             l.outer = l.hw + aa * 0.5f;
             l.sides = (int)Clamp(std::ceil(l.hw * pixelScale * 1.2f), 3.0f, 12.0f);
             return l;
-        }
-
-        // 1 / sqrt(x) for x > 0, to 2e-7: the processor's estimate and a Newton step where it has one (a polyline's
-        // joints by the thousand: the square roots and divisions were most of their cost)
-        inline float RSqrt(float x)
-        {
-#if defined(_M_X64) || defined(__SSE__)
-            const float y = _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(x)));
-            return y * (1.5f - 0.5f * x * y * y);
-#else
-            return 1.0f / std::sqrt(x);
-#endif
         }
 
         // A flat shape's corners as SdRoundRect draws them, per corner: the radius grown by the smoothing (R) and the
@@ -1522,86 +1508,39 @@ namespace esia
         // Not where the geometry clips a miter (a turn sharper than 120 degrees: that rung leaves the miter's line), nor
         // where a piece is too short for its joints' lines (they would cross inside its quad), nor for points closer
         // than BuildPath keeps apart.
+        if ((rgba >> 24) == 0)
+            return true;   // nothing to draw
         thread_local std::vector<Vec2> tNormal;
         thread_local std::vector<float> tJointCode;
-        thread_local QuadVector tLineQuads;
         tNormal.resize((std::size_t)n);
         tJointCode.resize((std::size_t)n);
         Vec2* normal = tNormal.data();
         float* code = tJointCode.data();   // QuadInstance::LineDirectionCode: whole numbers, packed as they are
-        // the segments' unit normals (the geometry's, (-dy, dx)) and the bounds: a loop of its own, short and without a
-        // chain from one segment to the next, so the processor runs many of them at once
-        Vec2 lo = path[n - 1], hi = path[n - 1];
-        for (int i = 0; i + 1 < n; ++i)
-        {
-            const Vec2 p = path[i], d = path[i + 1] - p;
-            const float l2 = LengthSq(d);
-            if (!(l2 > 1e-8f))
-                return false;   // a point BuildPath drops
-            const float inv = RSqrt(l2);
-            normal[i] = Vec2(-d.y * inv, d.x * inv);
-            lo = Vec2(std::min(lo.x, p.x), std::min(lo.y, p.y));
-            hi = Vec2(std::max(hi.x, p.x), std::max(hi.y, p.y));
-        }
-        // the joints' lines: the normal at an end, the normals' bisector between - |a + b| is twice the cosine of half
-        // the turn, the miter's reach its inverse. The direction's code needs no unit vector: it does not wait for the
-        // bisector's length.
-        float lowest = 1.0f;   // the cosine of half the sharpest turn, squared
-        code[0] = QuadInstance::LineDirectionCode(normal[0]);
-        for (int i = 1; i + 1 < n; ++i)
-        {
-            const Vec2 a = normal[i - 1], b = normal[i];
-            const float h = 0.5f * (1.0f + Dot(a, b));
-            if (!(h >= 0.25f))
-                return false;   // a turn sharper than 120 degrees: the geometry clips its miter
-            lowest = std::min(lowest, h);
-            code[i] = QuadInstance::LineDirectionCode(a + b);
-        }
-        code[n - 1] = QuadInstance::LineDirectionCode(normal[n - 2]);
+        // The loops run on the processor's widest vectors (render::lines, esia::cpu: AVX-512, AVX2, SSE2, NEON or plain
+        // C++), every level with the same bits: the segments' unit normals (the geometry's, (-dy, dx)), the bounds and the
+        // shortest segment's extent; the joints' lines - the normal at an end, the normals' bisector between, |a + b| twice
+        // the cosine of half the turn and the miter's reach its inverse - and the sharpest turn; the pieces.
+        Vec2 lo, hi;
+        float shortest = 0.0f, lowest = 1.0f;
+        if (!render::lines::Normals(path, n, normal, lo, hi, shortest) || !render::lines::Joints(normal, n, code, lowest))
+            return false;   // points BuildPath drops, a turn sharper than 120 degrees
         const std::uint32_t reach = (std::uint32_t)std::ceil((1.0f / std::sqrt(lowest) - 1.0f) * 16.0f);
         const float r = outer * (1.0f + (float)reach / 16.0f);
         // each piece's far line clear of its quad's near corners and the near line of the far ones, by a margin for the
         // directions' steps. A joint's line meets the segment at 30 degrees or more (|cross| at least half its length:
         // the turn is 120 degrees at most) and turns from the other joint's by less than half a turn (r at most), so a
         // piece longer than 2 r and the margin along x or y is clear: only shorter ones are measured.
-        auto cross = [](Vec2 u, Vec2 v) { return std::fabs(u.x * v.y - u.y * v.x); };
-        auto joint = [&](int j) {   // its line as a unit vector
-            if (j == 0 || j == n - 1)
-                return normal[j == 0 ? 0 : n - 2];
-            const Vec2 a = normal[j - 1], b = normal[j];
-            return (a + b) * (0.5f * RSqrt(0.5f * (1.0f + Dot(a, b))));
-        };
         const float clear = 2.02f * r;
-        tLineQuads.resize((std::size_t)n + 1);
-        QuadInstance* quads = tLineQuads.data();
+        if (!(shortest > clear) && !render::lines::Clear(path, normal, n, r, clear))
+            return false;
         // SetLinePiece's fields with the joints' codes as floats: -1 - (kind + 8 (reach + 32 joint)) and A + 256 joint,
-        // whole numbers below 2^24
-        const float head = -1.0f - (float)((std::uint32_t)QuadShape::LinePiece + 8u * reach), rgb = (float)(rgba & 0xFFFFFFu);
-        const float alpha = (float)(rgba >> 24);
-        for (int i = 0; i + 1 < n; ++i)
-        {
-            const Vec2 a = path[i], b = path[i + 1], d = b - a;
-            if (!(std::max(std::fabs(d.x), std::fabs(d.y)) > clear))
-            {
-                const Vec2 u0 = joint(i), u1 = joint(i + 1);
-                const float turn = cross(u0, u1) * r, margin = (std::fabs(d.x) + std::fabs(d.y) + r) * 1e-3f;
-                if (!(cross(u0, d) - turn > margin && cross(u1, d) - turn > margin))
-                    return false;
-            }
-            QuadInstance& q = quads[i];
-            q.rect[0] = a.x;
-            q.rect[1] = a.y;
-            q.rect[2] = b.x;
-            q.rect[3] = b.y;
-            q.packed[0] = head - 256.0f * code[i];
-            q.packed[1] = hw;
-            q.packed[2] = rgb;
-            q.packed[3] = alpha + 256.0f * code[i + 1];
-        }
+        // whole numbers below 2^24; written where the list keeps them
+        const float e = hw * (1.0f + (float)reach / 16.0f);   // as far as the pieces' Bounds go
+        QuadInstance* quads = dl_->AppendShapeQuads((std::size_t)n + 1, esia::Rect(lo.x - e, lo.y - e, hi.x + e, hi.y + e));
+        const float head = -1.0f - (float)((std::uint32_t)QuadShape::LinePiece + 8u * reach);
+        render::lines::Pieces(path, n, code, head, hw, (float)(rgba & 0xFFFFFFu), (float)(rgba >> 24), quads);
         quads[n - 1].SetLineCap(path[0], path[1], hw, (std::uint32_t)code[0], reach, (std::uint32_t)sides, rgba);
         quads[n].SetLineCap(path[n - 1], path[n - 2], hw, (std::uint32_t)code[n - 1], reach, (std::uint32_t)sides, rgba);
-        const float e = hw * (1.0f + (float)reach / 16.0f);   // as far as the pieces' Bounds go
-        dl_->AddShapeQuads(quads, (std::size_t)n + 1, esia::Rect(lo.x - e, lo.y - e, hi.x + e, hi.y + e));
         return true;
     }
 

@@ -1,5 +1,6 @@
 // Painter: the fx::Instance encoding (it must stay WGT's: the shaders read it), culling, masks, scale, glow
 // containment, geometry primitives, layers and fades.
+#include "esia/core/cpu.hpp"
 #include "esia/render/painter.hpp"
 #include "esia/text/glyph_atlas.hpp"
 #include "esia_test.hpp"
@@ -974,5 +975,73 @@ ESIA_TEST(Painter, SolidLinesAreTheirStyledLines)
         ESIA_CHECK(std::memcmp(a.Vertices().data(), b.Vertices().data(), a.Vertices().size() * sizeof(Vertex)) == 0);
         ESIA_CHECK(std::memcmp(a.FxInstances().data(), b.FxInstances().data(), a.FxInstances().size() * sizeof(fx::Instance)) == 0);
         ESIA_CHECK(k == 2 ? a.Quads().empty() : a.Quads().size() == 1 + 5 + 5 + 5);   // the line, the waves, the zigzag less its repeat; the turn geometry
+    }
+}
+
+// Every vector level this processor runs (esia::cpu: SSE2, AVX2, AVX-512, NEON) draws polylines bit for bit as plain C++
+// does - quads, the geometry of the ones left to it, the bounds: lines of 2 to 71 points (every length of the vector
+// loops' tails) turning either way, hairlines to thick ones, translucent ones, at whole and fractional scales, with
+// pieces short enough to be measured one by one, and long dense series (a pixel or two a point: every piece measured).
+ESIA_TEST(Painter, PolylineKernelsAgree)
+{
+    std::vector<std::vector<Vec2>> lines;
+    std::uint32_t seed = 12345u;
+    auto rnd = [&seed]() {
+        seed = seed * 1664525u + 1013904223u;
+        return (float)(seed >> 8) / 16777216.0f;
+    };
+    for (int count = 2; count < 72; ++count)
+    {
+        std::vector<Vec2> pts;
+        float x = 5.0f + rnd() * 20.0f, y = 40.0f + rnd() * 200.0f;
+        for (int i = 0; i < count; ++i)
+        {
+            pts.push_back(Vec2(x, y));
+            x += 3.0f + rnd() * 9.0f;
+            y += (rnd() - 0.5f) * 10.0f;
+        }
+        lines.push_back(pts);
+    }
+    for (int k = 0; k < 4; ++k)
+    {
+        std::vector<Vec2> pts;
+        for (int i = 0; i < 300 + 7 * k; ++i)
+            pts.push_back(Vec2(4.0f + (float)i * (1.0f + 0.25f * (float)k), 150.0f + 30.0f * std::sin((float)i * 0.05f + (float)k) + 2.0f * rnd()));
+        lines.push_back(pts);
+    }
+    auto draw = [&](cpu::Simd level, float scale) {
+        cpu::Force(level);
+        DrawList dl = MakeList();
+        PainterEnv env;
+        env.pixelScale = scale;
+        Painter p(dl, env);
+        int k = 0;
+        for (const std::vector<Vec2>& pts : lines)
+        {
+            const Color c(0.2f, 0.7f, 1.0f, k % 3 == 0 ? 0.5f : 1.0f);
+            p.Polyline(pts.data(), (int)pts.size(), 0.6f + (float)(k % 5) * 1.7f, c);
+            ++k;
+        }
+        cpu::Unforce();
+        return dl;
+    };
+    for (const float scale : {1.0f, 1.25f})
+    {
+        const DrawList ref = draw(cpu::Simd::Scalar, scale);
+        ESIA_CHECK(ref.Quads().size() > 1000 && !ref.Vertices().empty());   // quads mostly, a few lines left to geometry
+        for (const cpu::Simd level : {cpu::Simd::Sse2, cpu::Simd::Avx2, cpu::Simd::Avx512, cpu::Simd::Neon})
+        {
+            if (!cpu::Runs(level))
+                continue;
+            const DrawList got = draw(level, scale);
+            ESIA_CHECK(got.Quads().size() == ref.Quads().size() && got.Vertices().size() == ref.Vertices().size());
+            ESIA_CHECK(got.Commands().size() == ref.Commands().size());
+            if (got.Quads().size() != ref.Quads().size() || got.Vertices().size() != ref.Vertices().size() || got.Commands().size() != ref.Commands().size())
+                continue;
+            ESIA_CHECK(std::memcmp(got.Quads().data(), ref.Quads().data(), ref.Quads().size() * sizeof(QuadInstance)) == 0);
+            ESIA_CHECK(std::memcmp(got.Vertices().data(), ref.Vertices().data(), ref.Vertices().size() * sizeof(Vertex)) == 0);
+            for (std::size_t i = 0; i < ref.Commands().size(); ++i)
+                ESIA_CHECK(got.Commands()[i].vtxBounds == ref.Commands()[i].vtxBounds && got.Commands()[i].count == ref.Commands()[i].count);
+        }
     }
 }

@@ -1,6 +1,7 @@
 // Esia - draw list implementation (see esia/core/draw_list.hpp)
 #include "esia/core/draw_list.hpp"
 #include <algorithm>
+#include <cstring>
 
 namespace esia
 {
@@ -207,11 +208,18 @@ namespace esia
     {
         if (count == 0 || shapes[0].Alpha() == 0)
             return;
+        std::memcpy(AppendShapeQuads(count, bounds), shapes, count * sizeof(QuadInstance));
+    }
+
+    QuadInstance* DrawList::AppendShapeQuads(std::size_t count, const Rect& bounds)
+    {
         DrawCmd& c = QuadCommand(0, true);
-        quads_.insert(quads_.end(), shapes, shapes + count);
+        const std::size_t at = quads_.size();
+        quads_.resize(at + count);
         c.count += (std::uint32_t)count;
         c.shapes = true;
         c.vtxBounds = c.vtxBounds.Union(bounds);
+        return quads_.data() + at;
     }
 
     DrawList::PrimWriter DrawList::PrimReserve(std::uint32_t indexCount, std::uint32_t vertexCount)
