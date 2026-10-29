@@ -134,13 +134,17 @@ namespace esia
         // A line's direction in 16 bits, the same for both of its senses: its diamond angle - y / (|x| + y) on the upper
         // half-plane, 0 to 2 for half a turn - in steps of 1/32768. Exact to decode (esia_quad.hlsl: the vector
         // (1 - d, d) or (1 - d, 2 - d), normalized), no trigonometry either way; at most 3e-5 radians off.
-        static std::uint32_t LineDirection(Vec2 v)
+        static std::uint32_t LineDirection(Vec2 v) { return (std::uint32_t)LineDirectionCode(v); }
+        // ... as a float (a whole number, exact): the diamond angle around the whole turn is 1 - x / (|x| + |y|) above
+        // the x axis and 3 + x / (|x| + |y|) below it; half a turn later it is 2 more, so 2 apart - 65536 steps - is the
+        // same line, and the steps wrap at 65536 (one division and a sign, no branch: the joints of a line across a
+        // chart turn either way at random).
+        static float LineDirectionCode(Vec2 v)
         {
-            if (v.y < 0.0f || (v.y == 0.0f && v.x < 0.0f))
-                v = Vec2(-v.x, -v.y);
-            const float s = (v.x < 0.0f ? -v.x : v.x) + v.y;
-            const float d = s > 0.0f ? (v.x >= 0.0f ? v.y / s : 1.0f - v.x / s) : 0.0f;
-            return (std::uint32_t)(d * 32768.0f + 0.5f) & 0xFFFFu;
+            const float s = (v.x < 0.0f ? -v.x : v.x) + (v.y < 0.0f ? -v.y : v.y);
+            const float p = v.x / (s > 1e-30f ? s : 1e-30f);
+            const float steps = ((1.0f - (v.y < 0.0f ? -p : p)) * 32768.0f + 12582912.0f) - 12582912.0f;   // rounded: 1.5 2^23, whole floats
+            return steps >= 65536.0f ? steps - 65536.0f : steps;
         }
         bool IsShape() const { return packed[0] < 0.0f; }
         // a shape's fields (SetShape's, after the rounding to their steps)

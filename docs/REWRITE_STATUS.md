@@ -45,8 +45,9 @@ Vulkan; COLR color emoji; scrolling by touch from any item.
 **Render-class cost, round 2: much content on screen** (2026-10-30, in Esia): plain shapes - a solid fill or stroke
 on a rounded rectangle, a circle, a capsule, a segment - and polylines are 32-byte quads drawn in the draws of the text
 around them, with the pixels they had; shapes and labels overlapping one another are one draw (a thousand overlapping
-items: 948 draws -> 1); a text can be drawn from the nearest whole pixel. Measured against Dear ImGui 1.92.9b and
-1.93.0. Polyline's round ends, drawn inside the line, are beyond it.
+items: 948 draws -> 1); a text can be drawn from the nearest whole pixel; solid lines and polylines from a Color,
+without a Style. Measured against Dear ImGui 1.92.9b and 1.93.0. Polyline's round ends, drawn inside the line, are
+beyond it.
 
 **Glass on every shape** (2026-10-28, in Esia): polygons of any outline - slanted tabs, triangles, stars, arrows -
 as one FX path each, with every material a rounded rectangle takes, glass included; lines, areas and ring sectors with
@@ -211,6 +212,15 @@ each, where Dear ImGui takes 2).
   the turns at its ends, a scale or a mask keep the line geometry.
 * `FillRect` and `HLine` are `QuadShape::Solid` quads over the pixels their two triangles covered (no antialiasing, as
   before) instead of indexed geometry: no third program among the text.
+* Solid lines without a Style: `Line(a, b, thickness, color)` and `Polyline(points, count, thickness, color, flags)` draw
+  what `Style().Fill(color)` draws, quad for quad, without building a Style (a few hundred bytes of defaults) or going
+  through the material checks - as `FillRound` does for rounded rectangles; a polyline's quads come from the points
+  themselves when they need no smoothing and repeat none. A polyline's joints cost less: the segments' normals in a loop
+  of their own (no chain from one segment to the next), reciprocal square roots from the processor's estimate and a
+  Newton step on x86, a joint's code from the bisector before its length is known - the diamond angle around the whole
+  turn modulo 2, one division and no branch (the joints of a line across a chart turn either way at random) -, and a
+  piece longer than twice its quad's reach along x or y is clear of its joints' lines without being measured (a joint's
+  line meets the segment at 30 degrees or more).
 * A plain shape reads no texture: it joins the quads before it whatever their texture, and a run of shapes takes the
   texture of the first glyph after it (`DrawCmd::anyTexture`, `RenderOp::anyTexture`) - in the list and in the planner -
   so shapes and labels overlapping one another are one draw, in drawing order, whatever order the kinds come in.
@@ -268,11 +278,23 @@ the widgets, 1920 x 1080, 5 alternated runs): with a thousand items of shapes an
 0.679 ms on Direct3D 11 and 1.042 -> 0.791 on Direct3D 12, GPU 0.233 -> 0.069 and 0.228 -> 0.102, 538 draws -> 1; its
 ordinary screens within 1 %.
 
+The solid lines and the cheaper joints came after these numbers; measured again on the same benchmark (4 builds
+alternated, 3 runs each), Direct3D 11, ms, before -> after (Dear ImGui 1.92.9b / 1.93.0):
+
+| scene | CPU | build | GPU |
+| --- | --- | --- | --- |
+| 10 000 lines, 1.5 px | 0.294 -> 0.137 (0.338 / 0.176) | 0.280 -> 0.122 | 0.033 (1.93.0: 0.063) |
+| 1 000 lines across the screen to one point | 0.031 -> 0.015 (0.033 / 0.021) | 0.027 -> 0.011 | 0.037 (0.043) |
+| 200 polylines of 64 points, 2 px | 0.189 -> 0.087 (0.079 / 0.100) | 0.173 -> 0.071 | 0.028 (0.046) |
+
+Direct3D 12 and Vulkan alike (the polylines 0.88 and 0.94 times Dear ImGui 1.93.0's CPU); every other scene the same as
+before.
+
 ### Not done
 
-* Thin lines' CPU against Dear ImGui 1.93.0, whose thin lines are a textured quad each: 10 000 lines 0.281 against
-  0.176 ms, 1 000 lines across the screen 0.031 against 0.021, the polylines 0.194 against 0.099 (Esia's GPU time is
-  lower in all three). Next: a lean path for a plain line, past the style and the material checks.
+* Polylines against Dear ImGui 1.92.9b's CPU: 1.04 to 1.11 times (the joints' arithmetic one joint at a time; SIMD
+  would take four). On OpenGL Esia's submission is most of the small scenes: 1 000 lines across the screen 0.046 ms
+  against Dear ImGui 1.93.0's 0.037, the polylines 0.125 against 0.114 (their build the same as on the other APIs).
 * Labels at new sub-pixel offsets every frame still build in 1.7 times Dear ImGui's time unless drawn on whole pixels
   (`TextFlags_PixelSnap`: 0.82 times).
 * A plain shape between FX shapes that overlap it changes program twice (a draw each): scenes of glass and shadows with

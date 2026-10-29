@@ -7,6 +7,9 @@
 #include <cstddef>
 #include <cstring>
 #include <optional>
+#if defined(_M_X64) || defined(__SSE__)
+#include <xmmintrin.h>   // RSqrt
+#endif
 
 namespace esia
 {
@@ -118,6 +121,43 @@ namespace esia
         }
 
         thread_local std::vector<Vec2> tPath;
+
+        // Polyline's cross-section at `pixelScale`: half its width, its inside and its edge (a pixel of antialiasing
+        // between them), the sides of its round ends; a line thinner than a pixel is a pixel wide and fainter (`fade`)
+        struct LineSection
+        {
+            float hw, inner, outer, fade;
+            int sides;
+        };
+
+        LineSection Section(float thickness, float pixelScale)
+        {
+            const float aa = 1.0f / pixelScale;
+            LineSection l;
+            l.hw = thickness * 0.5f;
+            l.fade = 1.0f;
+            if (thickness < aa)
+            {
+                l.fade = thickness / aa;
+                l.hw = aa * 0.5f;
+            }
+            l.inner = std::max(l.hw - aa * 0.5f, 0.0f);
+            l.outer = l.hw + aa * 0.5f;
+            l.sides = (int)Clamp(std::ceil(l.hw * pixelScale * 1.2f), 3.0f, 12.0f);
+            return l;
+        }
+
+        // 1 / sqrt(x) for x > 0, to 2e-7: the processor's estimate and a Newton step where it has one (a polyline's
+        // joints by the thousand: the square roots and divisions were most of their cost)
+        inline float RSqrt(float x)
+        {
+#if defined(_M_X64) || defined(__SSE__)
+            const float y = _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(x)));
+            return y * (1.5f - 0.5f * x * y * y);
+#else
+            return 1.0f / std::sqrt(x);
+#endif
+        }
 
         // A flat shape's corners as SdRoundRect draws them, per corner: the radius grown by the smoothing (R) and the
         // superellipse's exponent (n), for a box of half size `maxR` at the smallest
@@ -484,6 +524,29 @@ namespace esia
         const esia::Rect bounds(std::min(a.x, b.x) - h, std::min(a.y, b.y) - h, std::max(a.x, b.x) + h, std::max(a.y, b.y) + h);
         const float extra[4] = {a.x, a.y, b.x, b.y};
         EmitShape(fx::ShapeKind::Segment, bounds, s, extra, h);   // (the half thickness as its radius: no copy of the style)
+    }
+
+    void Painter::Line(Vec2 a, Vec2 b, float thickness, Color color)
+    {
+        // the segment quad QuadShapes makes of a Style with a fill alone; anything else through that Style
+        const float smoothing = env_.cornerSmoothing;
+        if (!env_.quadShapes || maskDepth_ > 0 || scaleDepth_ > 0 || !(smoothing >= 0.0f && smoothing <= 1.0f))
+        {
+            Line(a, b, thickness, Style().Fill(color));
+            return;
+        }
+        color.a *= Saturate(alpha_);   // (Saturate(opacity * alpha_), the Style's opacity 1)
+        const std::uint32_t rgba = color.ToRgba8();
+        if ((rgba >> 24) == 0)
+            return;
+        const float h = thickness * 0.5f;
+        const esia::Rect bounds(std::min(a.x, b.x) - h, std::min(a.y, b.y) - h, std::max(a.x, b.x) + h, std::max(a.y, b.y) + h);
+        const esia::Rect& clip = dl_->ClipRect();
+        if (bounds.max.x + 2.0f < clip.min.x || bounds.max.y + 2.0f < clip.min.y || bounds.min.x - 2.0f > clip.max.x || bounds.min.y - 2.0f > clip.max.y)
+            return;
+        QuadInstance q;
+        q.SetShape(QuadShape::SegmentFill, esia::Rect(a, b), h, smoothing, 0.0f, 0.0f, rgba);
+        dl_->AddShapeQuad(q, bounds);
     }
 
     void Painter::Merge(const esia::Rect& a, const esia::Rect& b, float radius, float smoothness, const Style& s)
@@ -1447,7 +1510,7 @@ namespace esia
         dl_->AddShapeQuad(q, r);
     }
 
-    bool Painter::LineQuads(const std::vector<Vec2>& path, float hw, float outer, int sides, std::uint32_t rgba)
+    bool Painter::LineQuads(const Vec2* path, int n, float hw, float outer, int sides, std::uint32_t rgba)
     {
         // The geometry (Polyline) puts a rung of vertices across every point - along the segment's normal at the ends,
         // along the miter between - and fills between the rungs with triangles: the color's alpha flat inside, falling
@@ -1457,69 +1520,107 @@ namespace esia
         // rasterizer gives every pixel on it to one of them, as it does the triangles - a translucent line is blended
         // once. The shader gives each pixel the triangles' alpha (esia_quad.hlsl); an end's quad (LineCap) its fan's.
         // Not where the geometry clips a miter (a turn sharper than 120 degrees: that rung leaves the miter's line), nor
-        // where a piece is too short for its joints' lines (they would cross inside its quad).
-        const int n = (int)path.size();
-        thread_local std::vector<Vec2> tJointDir;
-        thread_local std::vector<std::uint32_t> tJointCode;
+        // where a piece is too short for its joints' lines (they would cross inside its quad), nor for points closer
+        // than BuildPath keeps apart.
+        thread_local std::vector<Vec2> tNormal;
+        thread_local std::vector<float> tJointCode;
         thread_local QuadVector tLineQuads;
-        std::vector<Vec2>& dir = tJointDir;
-        std::vector<std::uint32_t>& code = tJointCode;
-        dir.resize((std::size_t)n);
-        code.resize((std::size_t)n);
-        // the joints' lines: the segment's unit normal (the geometry's, (-dy, dx)) at an end, the normals' bisector
-        // between - |a + b| is twice the cosine of half the turn, the miter's reach its inverse
-        float narrowest = 1.0f;
-        Vec2 prev(0, 0), lo = path[0], hi = path[0];
-        for (int i = 0; i < n; ++i)
-        {
-            const Vec2 p = path[(std::size_t)i];
-            lo = Vec2(std::min(lo.x, p.x), std::min(lo.y, p.y));
-            hi = Vec2(std::max(hi.x, p.x), std::max(hi.y, p.y));
-            Vec2 b = prev;
-            if (i + 1 < n)
-            {
-                const Vec2 d = path[(std::size_t)i + 1] - p;
-                const float l2 = LengthSq(d);
-                if (!(l2 > 0.0f))
-                    return false;
-                const float inv = 1.0f / std::sqrt(l2);
-                b = Vec2(-d.y * inv, d.x * inv);
-            }
-            Vec2 m = b;
-            if (i > 0 && i + 1 < n)
-            {
-                const float h = 0.5f * (1.0f + Dot(prev, b));   // the cosine of half the turn, squared
-                if (!(h >= 0.25f))
-                    return false;   // a turn sharper than 120 degrees: the geometry clips its miter
-                const float c = std::sqrt(h);
-                narrowest = std::min(narrowest, c);
-                m = (prev + b) * (0.5f / c);
-            }
-            dir[(std::size_t)i] = m;
-            code[(std::size_t)i] = QuadInstance::LineDirection(m);
-            prev = b;
-        }
-        const std::uint32_t reach = (std::uint32_t)std::ceil((1.0f / narrowest - 1.0f) * 16.0f);
-        const float r = outer * (1.0f + (float)reach / 16.0f);
-        // each piece's far line clear of its quad's near corners and the near line of the far ones, by a margin for the
-        // directions' steps
-        auto cross = [](Vec2 u, Vec2 v) { return std::fabs(u.x * v.y - u.y * v.x); };
-        QuadVector& quads = tLineQuads;
-        quads.resize((std::size_t)n + 1);
+        tNormal.resize((std::size_t)n);
+        tJointCode.resize((std::size_t)n);
+        Vec2* normal = tNormal.data();
+        float* code = tJointCode.data();   // QuadInstance::LineDirectionCode: whole numbers, packed as they are
+        // the segments' unit normals (the geometry's, (-dy, dx)) and the bounds: a loop of its own, short and without a
+        // chain from one segment to the next, so the processor runs many of them at once
+        Vec2 lo = path[n - 1], hi = path[n - 1];
         for (int i = 0; i + 1 < n; ++i)
         {
-            const Vec2 u0 = dir[(std::size_t)i], u1 = dir[(std::size_t)i + 1];
-            const Vec2 a = path[(std::size_t)i], b = path[(std::size_t)i + 1], d = b - a;
-            const float turn = cross(u0, u1) * r, margin = (std::fabs(d.x) + std::fabs(d.y) + r) * 1e-3f;
-            if (!(cross(u0, d) - turn > margin && cross(u1, d) - turn > margin))
-                return false;
-            quads[(std::size_t)i].SetLinePiece(a, b, hw, code[(std::size_t)i], code[(std::size_t)i + 1], reach, rgba);
+            const Vec2 p = path[i], d = path[i + 1] - p;
+            const float l2 = LengthSq(d);
+            if (!(l2 > 1e-8f))
+                return false;   // a point BuildPath drops
+            const float inv = RSqrt(l2);
+            normal[i] = Vec2(-d.y * inv, d.x * inv);
+            lo = Vec2(std::min(lo.x, p.x), std::min(lo.y, p.y));
+            hi = Vec2(std::max(hi.x, p.x), std::max(hi.y, p.y));
         }
-        quads[(std::size_t)n - 1].SetLineCap(path[0], path[1], hw, code[0], reach, (std::uint32_t)sides, rgba);
-        quads[(std::size_t)n].SetLineCap(path[(std::size_t)n - 1], path[(std::size_t)n - 2], hw, code[(std::size_t)n - 1], reach, (std::uint32_t)sides, rgba);
+        // the joints' lines: the normal at an end, the normals' bisector between - |a + b| is twice the cosine of half
+        // the turn, the miter's reach its inverse. The direction's code needs no unit vector: it does not wait for the
+        // bisector's length.
+        float lowest = 1.0f;   // the cosine of half the sharpest turn, squared
+        code[0] = QuadInstance::LineDirectionCode(normal[0]);
+        for (int i = 1; i + 1 < n; ++i)
+        {
+            const Vec2 a = normal[i - 1], b = normal[i];
+            const float h = 0.5f * (1.0f + Dot(a, b));
+            if (!(h >= 0.25f))
+                return false;   // a turn sharper than 120 degrees: the geometry clips its miter
+            lowest = std::min(lowest, h);
+            code[i] = QuadInstance::LineDirectionCode(a + b);
+        }
+        code[n - 1] = QuadInstance::LineDirectionCode(normal[n - 2]);
+        const std::uint32_t reach = (std::uint32_t)std::ceil((1.0f / std::sqrt(lowest) - 1.0f) * 16.0f);
+        const float r = outer * (1.0f + (float)reach / 16.0f);
+        // each piece's far line clear of its quad's near corners and the near line of the far ones, by a margin for the
+        // directions' steps. A joint's line meets the segment at 30 degrees or more (|cross| at least half its length:
+        // the turn is 120 degrees at most) and turns from the other joint's by less than half a turn (r at most), so a
+        // piece longer than 2 r and the margin along x or y is clear: only shorter ones are measured.
+        auto cross = [](Vec2 u, Vec2 v) { return std::fabs(u.x * v.y - u.y * v.x); };
+        auto joint = [&](int j) {   // its line as a unit vector
+            if (j == 0 || j == n - 1)
+                return normal[j == 0 ? 0 : n - 2];
+            const Vec2 a = normal[j - 1], b = normal[j];
+            return (a + b) * (0.5f * RSqrt(0.5f * (1.0f + Dot(a, b))));
+        };
+        const float clear = 2.02f * r;
+        tLineQuads.resize((std::size_t)n + 1);
+        QuadInstance* quads = tLineQuads.data();
+        // SetLinePiece's fields with the joints' codes as floats: -1 - (kind + 8 (reach + 32 joint)) and A + 256 joint,
+        // whole numbers below 2^24
+        const float head = -1.0f - (float)((std::uint32_t)QuadShape::LinePiece + 8u * reach), rgb = (float)(rgba & 0xFFFFFFu);
+        const float alpha = (float)(rgba >> 24);
+        for (int i = 0; i + 1 < n; ++i)
+        {
+            const Vec2 a = path[i], b = path[i + 1], d = b - a;
+            if (!(std::max(std::fabs(d.x), std::fabs(d.y)) > clear))
+            {
+                const Vec2 u0 = joint(i), u1 = joint(i + 1);
+                const float turn = cross(u0, u1) * r, margin = (std::fabs(d.x) + std::fabs(d.y) + r) * 1e-3f;
+                if (!(cross(u0, d) - turn > margin && cross(u1, d) - turn > margin))
+                    return false;
+            }
+            QuadInstance& q = quads[i];
+            q.rect[0] = a.x;
+            q.rect[1] = a.y;
+            q.rect[2] = b.x;
+            q.rect[3] = b.y;
+            q.packed[0] = head - 256.0f * code[i];
+            q.packed[1] = hw;
+            q.packed[2] = rgb;
+            q.packed[3] = alpha + 256.0f * code[i + 1];
+        }
+        quads[n - 1].SetLineCap(path[0], path[1], hw, (std::uint32_t)code[0], reach, (std::uint32_t)sides, rgba);
+        quads[n].SetLineCap(path[n - 1], path[n - 2], hw, (std::uint32_t)code[n - 1], reach, (std::uint32_t)sides, rgba);
         const float e = hw * (1.0f + (float)reach / 16.0f);   // as far as the pieces' Bounds go
-        dl_->AddShapeQuads(quads.data(), quads.size(), esia::Rect(lo.x - e, lo.y - e, hi.x + e, hi.y + e));
+        dl_->AddShapeQuads(quads, (std::size_t)n + 1, esia::Rect(lo.x - e, lo.y - e, hi.x + e, hi.y + e));
         return true;
+    }
+
+    void Painter::Polyline(const Vec2* points, int count, float thickness, Color color, std::uint32_t flags)
+    {
+        // Without smoothing and repeated points BuildPath's path is the points themselves: their quads straight away.
+        // Anything else as Polyline with the Style.
+        if (points && count >= 2 && thickness > 0.0f && !(flags & PolylineFlags_Smooth) && env_.quadShapes && maskDepth_ == 0 && scaleDepth_ == 0)
+        {
+            Color col = color;
+            col.a *= alpha_;   // (Saturate(opacity) * alpha_, the Style's opacity 1)
+            if (col.a <= 0.0f)
+                return;
+            const LineSection section = Section(thickness, Pixel());
+            col.a *= section.fade;
+            if (LineQuads(points, count, section.hw, section.outer, section.sides, col.ToRgba8()))
+                return;
+        }
+        Polyline(points, count, thickness, Style().Fill(color), flags);
     }
 
     void Painter::Polyline(const Vec2* points, int count, float thickness, const Style& s, std::uint32_t flags)
@@ -1565,18 +1666,13 @@ namespace esia
         }
 
         // cross-sections: outer fringe, solid core, solid core, outer fringe (1 physical pixel of anti-aliasing)
-        const float aa = 1.0f / rs;
-        float hw = thickness * 0.5f;
-        if (thickness < aa)
-        {
-            col.a *= thickness / aa;   // hairline thinner than a pixel: fainter, not thinner
-            hw = aa * 0.5f;
-        }
-        const float inner = std::max(hw - aa * 0.5f, 0.0f), outer = hw + aa * 0.5f;
+        const LineSection section = Section(thickness, rs);
+        col.a *= section.fade;   // hairline thinner than a pixel: fainter, not thinner
+        const float hw = section.hw, inner = section.inner, outer = section.outer;
         const std::uint32_t cIn = col.ToRgba8(), cOut = Color(col.r, col.g, col.b, 0.0f).ToRgba8();
         const Vec2 uv(0, 0);
-        const int capSeg = (int)Clamp(std::ceil(hw * rs * 1.2f), 3.0f, 12.0f);
-        if (env_.quadShapes && scaleDepth_ == 0 && maskDepth_ == 0 && LineQuads(path, hw, outer, capSeg, cIn))
+        const int capSeg = section.sides;
+        if (env_.quadShapes && scaleDepth_ == 0 && maskDepth_ == 0 && LineQuads(path.data(), n, hw, outer, capSeg, cIn))
         {
             if (glow)
                 EndGlowLayer();

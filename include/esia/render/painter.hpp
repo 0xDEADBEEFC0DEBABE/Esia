@@ -214,6 +214,9 @@ namespace esia
         void Arc(Vec2 center, float radius, float thickness, float startRad, float sweepRad, const Style& s);
         void Ring(Vec2 center, float radius, float thickness, const Style& s);
         void Line(Vec2 a, Vec2 b, float thickness, const Style& s);
+        // A solid line: Line(a, b, thickness, Style().Fill(color)) without building a Style - its quad drawn with the text
+        // straight away (PainterEnv::quadShapes, outside masks and scales).
+        void Line(Vec2 a, Vec2 b, float thickness, Color color);
         // Liquid union of two rounded rects (smooth-min blend of the SDFs): metaball / morph effects.
         void Merge(const esia::Rect& a, const esia::Rect& b, float radius, float smoothness, const Style& s);
         // Rounded image (SDF-masked, anti-aliased).
@@ -267,6 +270,9 @@ namespace esia
         // all of them. Quads drawn with the text, the same pixels (PainterEnv::quadShapes), unless a turn is sharper
         // than 120 degrees or a segment too short for the turns at its ends, under a scale or a mask.
         void Polyline(const Vec2* points, int count, float thickness, const Style& s, std::uint32_t flags = PolylineFlags_None);
+        // A solid polyline: Polyline(points, count, thickness, Style().Fill(color), flags) without building a Style - its
+        // quads from the points themselves where they need no smoothing and repeat none.
+        void Polyline(const Vec2* points, int count, float thickness, Color color, std::uint32_t flags = PolylineFlags_None);
         // Fills between the same path and the horizontal line y = `baseline` (area charts). Solid or linear paint.
         void Area(const Vec2* points, int count, float baseline, const Paint& paint, std::uint32_t flags = PolylineFlags_None);
         // ... with a whole material: the area as an FX path (glass, strokes, shadows ...; Style::Radius rounds its
@@ -338,7 +344,7 @@ namespace esia
         void SolidRect(const esia::Rect& r, std::uint32_t rgba);
         // Polyline's line through `path` as quads drawn with the text (PainterEnv::quadShapes): its geometry's pixels
         // and coverage (false: the geometry draws it - a miter it clips, a piece too short for its joints)
-        bool LineQuads(const std::vector<Vec2>& path, float hw, float outer, int sides, std::uint32_t rgba);
+        bool LineQuads(const Vec2* path, int n, float hw, float outer, int sides, std::uint32_t rgba);
         void ApplyScale(fx::Instance& inst) const;
         void ExcludeFromScale(std::size_t vtxStart, std::size_t quadStart);
         float Pixel() const { return env_.pixelScale > 0.0f ? env_.pixelScale : 1.0f; }

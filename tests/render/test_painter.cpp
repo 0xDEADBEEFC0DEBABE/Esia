@@ -935,3 +935,44 @@ ESIA_TEST(Painter, PolylinesBecomeQuads)
     ESIA_CHECK(geometry(back, 3, 4.0f, PainterEnv(), false) && geometry(kink, 4, 10.0f, PainterEnv(), false));
     ESIA_CHECK(geometry(zig, 4, 4.0f, PainterEnv(), true) && geometry(zig, 4, 4.0f, Fx(), false));
 }
+
+// A solid line or polyline drawn with its Color (no Style built) is the one its Style().Fill(color) draws, quad for quad
+// and vertex for vertex: under an alpha, at a fractional pixel scale, outside the clip (nothing), thinner than a pixel,
+// with a repeated point and a turn sharper than 120 degrees (through the Style: BuildPath, the geometry), with
+// quadShapes off.
+ESIA_TEST(Painter, SolidLinesAreTheirStyledLines)
+{
+    const Color c(0.2f, 0.6f, 0.9f, 0.8f);
+    const Vec2 zig[5] = {Vec2(10, 40), Vec2(30, 20), Vec2(30, 20), Vec2(50, 40), Vec2(70, 20)};
+    const Vec2 wave[4] = {Vec2(10, 90), Vec2(40, 70), Vec2(70, 95), Vec2(100, 75)};
+    const Vec2 back[3] = {Vec2(10, 10), Vec2(60, 10), Vec2(15, 30)};
+    for (int k = 0; k < 4; ++k)
+    {
+        PainterEnv env;
+        env.alpha = k == 1 ? 0.5f : 1.0f;
+        env.quadShapes = k != 2;
+        env.pixelScale = k == 3 ? 1.5f : 1.0f;
+        DrawList a = MakeList(), b = MakeList();
+        Painter pa(a, env), pb(b, env);
+        pa.Line(Vec2(5, 5), Vec2(90, 60), 1.5f, c);
+        pb.Line(Vec2(5, 5), Vec2(90, 60), 1.5f, Style().Fill(c));
+        pa.Line(Vec2(500, 5), Vec2(600, 60), 1.5f, c);   // outside the clip
+        pb.Line(Vec2(500, 5), Vec2(600, 60), 1.5f, Style().Fill(c));
+        pa.Polyline(wave, 4, 3.0f, c);
+        pb.Polyline(wave, 4, 3.0f, Style().Fill(c));
+        pa.Polyline(wave, 4, 0.5f, c);
+        pb.Polyline(wave, 4, 0.5f, Style().Fill(c));
+        pa.Polyline(zig, 5, 3.0f, c);
+        pb.Polyline(zig, 5, 3.0f, Style().Fill(c));
+        pa.Polyline(back, 3, 4.0f, c);
+        pb.Polyline(back, 3, 4.0f, Style().Fill(c));
+        ESIA_CHECK(a.Quads().size() == b.Quads().size() && a.Vertices().size() == b.Vertices().size() && a.Indices().size() == b.Indices().size());
+        ESIA_CHECK(a.FxInstances().size() == b.FxInstances().size() && a.Commands().size() == b.Commands().size());
+        if (a.Quads().size() != b.Quads().size() || a.Vertices().size() != b.Vertices().size() || a.FxInstances().size() != b.FxInstances().size())
+            continue;
+        ESIA_CHECK(std::memcmp(a.Quads().data(), b.Quads().data(), a.Quads().size() * sizeof(QuadInstance)) == 0);
+        ESIA_CHECK(std::memcmp(a.Vertices().data(), b.Vertices().data(), a.Vertices().size() * sizeof(Vertex)) == 0);
+        ESIA_CHECK(std::memcmp(a.FxInstances().data(), b.FxInstances().data(), a.FxInstances().size() * sizeof(fx::Instance)) == 0);
+        ESIA_CHECK(k == 2 ? a.Quads().empty() : a.Quads().size() == 1 + 5 + 5 + 5);   // the line, the waves, the zigzag less its repeat; the turn geometry
+    }
+}
