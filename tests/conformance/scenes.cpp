@@ -1062,6 +1062,9 @@ namespace esia::conformance
             denseFx.golden = "dense";
             denseFx.fxShapes = true;
             denseFx.sameAs = "dense";
+            // where the 24 translucent lines meet at the bottom a pixel is blended a dozen times over: the two ways' last bits
+            // add up to 3 levels there on llvmpipe and lavapipe (2 everywhere else)
+            denseFx.sameTolerance = {3, 0.0, 3, 0.05};
             add("polylines", "polylines as quads drawn with the text (a piece per segment between its joints' lines, a cap per end) on a checker: "
                              "opaque and translucent lines turning by up to 115 degrees, steps on whole and half units, ends on pixel centers, a "
                              "hairline, a thick line, smooth curves, a line crossing itself, a short segment between turns; lines left to geometry "
