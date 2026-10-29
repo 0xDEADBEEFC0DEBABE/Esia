@@ -82,7 +82,7 @@ struct QuadPSIn
     ESIA_FLAT float4 shapeRect : TEXCOORD1;   // a shape: its rect, or the segment's end points
     ESIA_FLAT float4 shape : TEXCOORD2;       // ... radius (a segment's half thickness), smoothing, stroke width and align;
                                               // a polyline's inside and edge (half widths), an end's sides
-    ESIA_FLAT float kind : TEXCOORD3;         // ... its esia::QuadShape; -1: a textured quad
+    ESIA_FLAT float2 kind : TEXCOORD3;        // x: its esia::QuadShape (-1: a textured quad), y: UI units per pixel
 };
 
 // A polyline's quad corner (esia::QuadShape::LinePiece / LineCap, Painter::LineQuads). A piece's quad ends on the lines
@@ -163,13 +163,13 @@ QuadPSIn QuadShapeVS(QuadVSIn v)
             else
                 pos = float2(right ? rect.z + pad : rect.x - pad, bottom ? rect.w + pad : rect.y - pad);
         }
-        o.kind = kind;
+        o.kind = float2(kind, unit);
         o.uv = pos;
     }
     else
     {
         pos = float2(right ? rect.z : rect.x, bottom ? rect.w : rect.y);
-        o.kind = -1.0;
+        o.kind = float2(-1.0, 0.0);
         o.uv = QuadUv(packed, right, bottom);
     }
     o.pos = ESIA_CLIP_POSITION(float4(pos * gXform.xy + gXform.zw, 0.0, 1.0));
@@ -178,75 +178,78 @@ QuadPSIn QuadShapeVS(QuadVSIn v)
 
 // A polyline's coverage of the pixel as its geometry's triangles give it (Painter::Polyline): the color's alpha inside
 // `inner`, falling linearly to 0 at `outer`. A piece measures across its segment; an end is half a polygon of `sides`
-// sides round its point (the geometry's fan), measured across the side the pixel is in.
+// sides round its point (the geometry's fan), measured across the side the pixel is in (at the point itself, inside).
 float QuadLineCoverage(QuadPSIn i, float kind)
 {
     const float inner = i.shape.x, outer = i.shape.y;
     const float2 a = i.shapeRect.xy, b = i.shapeRect.zw, q = i.uv - a;
+    float cov;
     [branch] if (kind < 5.5)
-        return saturate((outer - abs(dot(q, normalize(float2(a.y - b.y, b.x - a.x))))) / max(outer - inner, 1e-6));
-    [branch] if (dot(q, q) < 1e-12)
-        return 1.0;
-    const float sides = floor(i.shape.z + 0.5), step = WGT_PI / sides;
-    const float2 away = normalize(a - b), side = float2(-away.y, away.x);
-    const float k = clamp(floor(atan2(max(dot(q, away), 0.0), dot(q, side)) / step), 0.0, sides - 1.0);
-    const float mid = (k + 0.5) * step, c = cos(0.5 * step);
-    return saturate((outer * c - dot(q, side * cos(mid) + away * sin(mid))) / max((outer - inner) * c, 1e-6));
+        cov = saturate((outer - abs(dot(q, normalize(float2(a.y - b.y, b.x - a.x))))) / max(outer - inner, 1e-6));
+    else
+    {
+        const float sides = floor(i.shape.z + 0.5), step = WGT_PI / sides;
+        const float2 away = normalize(a - b), side = float2(-away.y, away.x);
+        const float k = clamp(floor(atan2(max(dot(q, away), 0.0), dot(q, side)) / step), 0.0, sides - 1.0);
+        const float mid = (k + 0.5) * step, c = cos(0.5 * step);
+        cov = dot(q, q) < 1e-12 ? 1.0 : saturate((outer * c - dot(q, side * cos(mid) + away * sin(mid))) / max((outer - inner) * c, 1e-6));
+    }
+    return cov;
 }
 
 // A shape's coverage of the pixel, as FxPS takes its fill's (cov) or its stroke's (sc); a solid rect covers its pixels
-// whole; a polyline's piece or end as its geometry. `kind` is rounded: without flat interpolation (SM3) it comes a
-// little off its whole number.
-float QuadShapeCoverage(QuadPSIn i, float px)
+// whole; a polyline's piece or end as its geometry. Its units per pixel come from QuadShapeVS, not from derivatives: in
+// the branch they would be undefined (a software rasterizer gave a pixel of a thin line other ones). `kind` is rounded:
+// without flat interpolation (SM3) it comes a little off its whole number.
+float QuadShapeCoverage(QuadPSIn i)
 {
-    const float kind = floor(i.kind + 0.5);
+    const float kind = floor(i.kind.x + 0.5), px = max(i.kind.y, 1e-4);
+    float cov = 1.0;
     [branch] if (kind > 4.5)
-        return QuadLineCoverage(i, kind);
-    [branch] if (kind > 3.5)
-        return 1.0;
-    float d;
-    [branch] if (kind >= 1.5)
-        d = SdSegment(i.uv, i.shapeRect.xy, i.shapeRect.zw, i.shape.x);
-    else
-        d = SdRoundRect(i.uv - (i.shapeRect.xy + i.shapeRect.zw) * 0.5, max((i.shapeRect.zw - i.shapeRect.xy) * 0.5, 1e-3), i.shape.xxxx,
-                        i.shape.y);
-    [branch] if (kind - 2.0 * floor(kind * 0.5) > 0.5)
-        return saturate(0.5 - (d - i.shape.z * i.shape.w) / px) - saturate(0.5 - (d + i.shape.z * (1.0 - i.shape.w)) / px);
-    return saturate(0.5 - d / px);
+        cov = QuadLineCoverage(i, kind);
+    else if (kind < 3.5)
+    {
+        float d;
+        [branch] if (kind >= 1.5)
+            d = SdSegment(i.uv, i.shapeRect.xy, i.shapeRect.zw, i.shape.x);
+        else
+            d = SdRoundRect(i.uv - (i.shapeRect.xy + i.shapeRect.zw) * 0.5, max((i.shapeRect.zw - i.shapeRect.xy) * 0.5, 1e-3), i.shape.xxxx,
+                            i.shape.y);
+        cov = kind - 2.0 * floor(kind * 0.5) > 0.5
+                  ? saturate(0.5 - (d - i.shape.z * i.shape.w) / px) - saturate(0.5 - (d + i.shape.z * (1.0 - i.shape.w)) / px)
+                  : saturate(0.5 - d / px);
+    }
+    return cov;
 }
 
-// The vertex color's alpha, the shape's coverage and the edge fade (`px`: UI units per pixel, as FxPS measures them)
-float QuadShapeAlpha(QuadPSIn i, float px)
+// The vertex color's alpha, the shape's coverage and the edge fade
+float QuadShapeAlpha(QuadPSIn i)
 {
-    return i.col.a * QuadShapeCoverage(i, px) * WgtEdgeFade(WgtPixelPos(i.pos).y);
+    return i.col.a * QuadShapeCoverage(i) * WgtEdgeFade(WgtPixelPos(i.pos).y);
 }
 
-// The texel is read before the branch (its derivatives; a shape's reads the texture somewhere and drops it), the units
-// per pixel too.
+// The texel is read before the branch (a shape's reads the texture somewhere and drops it).
 float4 QuadImagePS(QuadPSIn i) : SV_Target
 {
     const float4 t = ESIA_SAMPLE(gTex, gLinear, i.uv);
-    const float px = max(abs(ddx(i.uv.x)) + abs(ddy(i.uv.x)), 1e-4);
-    [branch] if (i.kind > -0.5)
-        return WgtOutputStraight(float4(i.col.rgb, QuadShapeAlpha(i, px)));
+    [branch] if (i.kind.x > -0.5)
+        return WgtOutputStraight(float4(i.col.rgb, QuadShapeAlpha(i)));
     return UiColor(i.col, t, i.pos);
 }
 
 float4 QuadGrayPS(QuadPSIn i) : SV_Target
 {
     const float4 t = ESIA_SAMPLE(gTex, gLinear, i.uv);
-    const float px = max(abs(ddx(i.uv.x)) + abs(ddy(i.uv.x)), 1e-4);
-    [branch] if (i.kind > -0.5)
-        return WgtOutputStraight(float4(i.col.rgb, QuadShapeAlpha(i, px)));
+    [branch] if (i.kind.x > -0.5)
+        return WgtOutputStraight(float4(i.col.rgb, QuadShapeAlpha(i)));
     return TextGrayColor(i.col, t.r, i.pos);
 }
 
 float4 QuadLcdGrayPS(QuadPSIn i) : SV_Target
 {
     const float4 t = ESIA_SAMPLE(gTex, gLinear, i.uv);
-    const float px = max(abs(ddx(i.uv.x)) + abs(ddy(i.uv.x)), 1e-4);
-    [branch] if (i.kind > -0.5)
-        return WgtOutputStraight(float4(i.col.rgb, QuadShapeAlpha(i, px)));
+    [branch] if (i.kind.x > -0.5)
+        return WgtOutputStraight(float4(i.col.rgb, QuadShapeAlpha(i)));
     return TextGrayColor(i.col, t.a, i.pos);
 }
 
@@ -254,8 +257,7 @@ float4 QuadLcdGrayPS(QuadPSIn i) : SV_Target
 TextLcdOut QuadLcdPS(QuadPSIn i)
 {
     const float4 t = ESIA_SAMPLE(gTex, gLinear, i.uv);
-    const float px = max(abs(ddx(i.uv.x)) + abs(ddy(i.uv.x)), 1e-4);
-    [branch] if (i.kind > -0.5)
-        return TextLcdOutput(i.col, QuadShapeAlpha(i, px).xxx);
+    [branch] if (i.kind.x > -0.5)
+        return TextLcdOutput(i.col, QuadShapeAlpha(i).xxx);
     return TextLcdColor(i.col, t, i.pos);
 }
