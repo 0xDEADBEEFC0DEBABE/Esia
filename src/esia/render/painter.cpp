@@ -1470,13 +1470,15 @@ namespace esia
                 }
             }
         }
-        // round caps: a half disc beyond each end, its rim anti-aliased
+        // round caps: a half disc beyond each end, its rim anti-aliased. Away from the line: back along the first segment
+        // (its normal turned a quarter clockwise, nm = (-dy, dx)), on along the last (a quarter the other way) - turned
+        // the other ways the half discs lay inside the line, which ended flat and showed them twice where translucent
         std::uint32_t next = base + (std::uint32_t)n * 4;
         for (int e = 0; e < 2; ++e)
         {
             const Vec2 p = e == 0 ? path[0] : path[(std::size_t)n - 1];
             const Vec2 nm = e == 0 ? nFirst : nLast;
-            const Vec2 away = e == 0 ? Vec2(nm.y, -nm.x) : Vec2(-nm.y, nm.x);
+            const Vec2 away = e == 0 ? Vec2(-nm.y, nm.x) : Vec2(nm.y, -nm.x);
             const std::uint32_t c0 = next;
             dl_->WriteVertex(p, uv, cIn);
             for (int k = 0; k <= capSeg; ++k)
