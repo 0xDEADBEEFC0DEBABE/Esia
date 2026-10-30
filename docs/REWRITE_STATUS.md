@@ -49,7 +49,9 @@ only where they are used, the bevel's normal from one corner.
 
 **SVG to textures** (2026-10-30, in Esia): SVG files parsed once and rasterized at the size drawn into texture pages, with
 exact area coverage (overlaps, both fill rules and a stroke's pieces resolved in the sweep); monochrome icons as one mask
-in any color; a 16-pixel icon in 7 us.
+in any color; a 16-pixel icon in 7 us. Later that day: icons that last drawn from the text's pages in the labels' draw,
+with the same pixels (200 rows of an icon and a label on row backgrounds: 394 draws -> 1), and of a large drawing only
+what the clip rect shows rasterized, with the whole image's pixels.
 
 **Polylines on the processor's vectors** (2026-10-30, in Esia): a polyline's loops on AVX-512, AVX2, SSE2 or NEON, chosen
 at run time, every level with the same bits; long dense series in 0.039 ms of CPU on AVX-512 (plain C++ 0.150, Dear
@@ -311,12 +313,12 @@ Painter::Image draws (2026-10-30): `include/esia/svg/svg.hpp`, the library `esia
   pages and moves into the lasting ones when the next frame draws it too (from the pixels it was made with): the sizes
   an animation passes through stay among the recent pages, found again when it comes back to them, and filling those
   never makes what stays on screen be rasterized again. A drawing larger than a page gets a texture of its own while it
-  is drawn.
+  is drawn. A monochrome icon that lasts goes into the text's pages instead (`Atlas::Tile`, below).
 * `svg::Draw` rasterizes at the size the drawing has on the target and draws it with its texels on pixels one to one:
   outside a scale on the rectangle rounded to whole physical pixels; under `Painter::PushScale` exactly where the scale
   puts it (to 1/64 pixel), rasterized there - as text is under a scale - so every frame of a scale animation has the
   pixels of its own geometry. A monochrome document (every paint currentColor) is rasterized once, as a mask, and drawn
-  in any color.
+  in any color. Only what the clip rect shows is rasterized (below).
 
 ### Quality
 
@@ -396,13 +398,99 @@ stay as well. A lookup that finds its drawing costs what it did (6.3 to 6.8 ns i
 * A drawing larger than an atlas page was not drawn at all (at the default 1024, anything over 1021 pixels - 510 UI
   units at a pixel scale of 2): a texture of its own now.
 
+### Icons with the labels, only what the clip shows (later the same day)
+
+An icon was an image of the atlas's RGBA8 pages, between labels drawn as glyph quads of the text's pages: another
+texture and another program, a draw of its own wherever the planner could not move it - with a background under each
+row, two draws a row. And a large drawing was rasterized whole, also where the clip rect hides it.
+
+#### What changed
+
+* `svg::Atlas::Tile`: a mask (a monochrome document, or `mask`) of up to 128 x 128 pixels that lasts - drawn in the frame
+  before too, the lasting pages' rule - goes into the text system's pages as a coverage tile (`TextSystem::FindTile` /
+  `AddTile`, keys of its own): its alpha taken from the pixels it was made with, or rasterized again where the recent
+  pages served it. What is new in a frame stays in the recent pages, so the sizes and places of an animation never reach
+  the text's pages, which start over only when they did before; then an icon is an image for a frame and a tile again.
+* `svg::Draw` draws a tile with `Painter::UnscaledCoverage`: a quad of plain coverage (`QuadInstance::SetCoverage`: the
+  alpha + 256; `DrawList::AddCoverageQuad`) in the command of the text on its page, at the image's place, in the
+  painter's opacity, left alone by PopScale. Under a Painter mask an icon stays an image (its FX image takes the mask;
+  `Painter::Masked`).
+* The programs that tell quads apart (`QuadShapeVS`; `QuadGrayPS`, `QuadLcdGrayPS`, `QuadLcdPS` - a command with plain
+  coverage draws with them, `DrawCmd::shapes`) give it UiColor's pixels: the color with the texel as its alpha, as an
+  image of white texels with that alpha, none of the text's composition (gamma, enhanced contrast:
+  `render::TextComposition`) - on Alpha8 and sub-pixel pages, with dual-source blending and without. The four programs'
+  GLSL, ESSL, MSL and SPIR-V come from CI's Shaders workflow, as every program's.
+* An image of part of a drawing (`detail::RasterizePart`) is made in the drawing's frame - the whole pixels around its
+  viewport, the viewport moved by the part's corner - and holds what it covers: its pixels are the whole image's there,
+  bit for bit. The rows above it are passed over as the whole image draws them (`Sweep::Pass`: each row's chains in their
+  order across it, without its coverage - where chains tie across a row, their order is the one the rows before left),
+  the columns beside it are not painted (a gradient is placed from its span's start, as before), and the border holds
+  the drawing's pixels where it goes on. `Rasterize` and `RasterOptions::viewport` are as they were: the drawing in the
+  image's pixels.
+* `svg::Draw` does not rasterize a drawing outside the clip rect, and of a large one reaching beyond it only the part
+  inside, when that is at most half of it - in steps of 256 pixels from its corner, so that the part is found again
+  while the drawing moves less than that (`Atlas::GetPart`). The part of a drawing made last is kept while the drawing is
+  drawn: a new part copies the pixels they share and rasterizes the bands around them.
+
+#### Measured
+
+200 rows of an icon (16 x 16 pixels, 12 documents) and a label: `list` four columns of 50 rows, `panels` the same on a
+plain rounded background a row, `grid` icons over labels in 8 columns drawn row by row. 1600 x 1000, Release clang-cl,
+the median of 9 alternated runs' medians (each 600 frames; the lowest and highest run in the report), ms; the old build
+draws the icons as images:
+
+| Direct3D 11 | build | submit | GPU | draws |
+| --- | --- | --- | --- | --- |
+| list | 0.0307 -> 0.0250 | 0.0161 -> 0.0060 | 0.0092 -> 0.0082 | 2 -> 1 |
+| panels | 0.0405 -> 0.0363 | 0.0379 -> 0.0067 | 0.0367 -> 0.0184 | 394 -> 1 |
+| grid | 0.0366 -> 0.0279 | 0.0162 -> 0.0056 | 0.0102 -> 0.0091 | 2 -> 1 |
+
+Vulkan: submit -24% / -81% / -18%, GPU +5% / -55% / 0% (the text's quads in a frame of two draws now run the program that
+tells quads apart); Direct3D 12: submit -22% / -56% / -20%, GPU 0% / -62% / -10%; build -8% to -15% on both. A second
+Direct3D 11 run gave the list's build -1% (the machine was shared).
+
+A large drawing, the CPU of its draws (a 1600 x 1000 view, 3 alternated runs):
+
+| | before | now |
+| --- | --- | --- |
+| 3200 x 2400, its middle shown: the first frame | 77 - 81 ms, 7.7 M texels | 29 - 31 ms, 2.3 M texels |
+| 800 x 600 zoomed to 4 times in 90 frames: a frame | 34 ms (worst 77) | 26 ms (worst 51 - 53) |
+| 1600 x 4000 scrolled through it, 6 pixels a frame: a frame | 0.22 ms (the first 65) | 0.30 - 0.32 ms (the first 15 - 18) |
+
+Scrolled, the drawing is made 15 times instead of once - every 256 pixels a part, from the part before and the band below
+it - and uploads 27.5 M texels instead of 6.4 M.
+
+#### Verified
+
+* `esia_svg_tests` (35): images of parts against the image of all of it, texel for texel (two drawings with curves,
+  dashes, crisp edges, gradients with a focus, layers and nested clips, masks and colors, three viewports, seven parts
+  inside, at and beyond its edges); a part's viewport moved by whole pixels; a lasting icon as a tile in the labels'
+  command, its coverage the mask's alpha, gone with the text's pages and back; animations - sizes, a scale, sizes in
+  turn - never in the text's pages; no tiles for colored drawings, masks over 128 pixels, under a Painter mask or
+  without tiles; tiles under a scale; only what the clip shows rasterized, the uploaded parts against the whole image
+  while it scrolls.
+  `esia_core_tests` `DrawList.CoverageQuadsJoinTheGlyphsOfTheirPage`, `esia_render_tests`
+  `Painter.UnscaledCoverageIsAQuadWithTheText`.
+* Over 2 922 SVG files (the custom feature files, Visual Studio's icons, two logos, Lucide's 1 924 icons, Steam's
+  controller images, QDarkStyle's): 525 960 parts of 52 596 images, 3 billion texels - none differs from the whole
+  image's. `Rasterize` against the version before, over the same files: 70 128 images (four sizes; no viewport, one at
+  fractions of a pixel, one inside the image; color and mask) - every one byte for byte the same.
+* Conformance `coverage` / `coverage_image` (plain coverage against images of it: light and dark ink, translucent, both
+  kinds of page, an edge fade, a glow layer): the same pixels on Direct3D 9, 10, 11, 12, OpenGL and Vulkan (RTX 4080
+  SUPER), and a temporary scene of `svg::Draw` - icons as tiles against images, under scales 1.25 / 1.5 / 2, the
+  painter's opacity, an edge fade, sub-pixel pages; a part against the whole image under the same clip: no pixel
+  differs. ctest 42 / 42 (clang-cl, every backend), MSVC `/W4 /WX`, the GNU flags on the changed files.
+
 ### Not done
 
 * Text, `<image>`, filters, masks, markers, patterns, `vector-effect`.
 * A stroke wider than a tight curve of an open path stays a set of overlapping pieces: exact, slower at large sizes.
 * A row crossed thousands of times: past 256 cuts it goes in strips of 1/32 pixel (coverage within about 1/64 there).
-* A large drawing is rasterized whole on the thread that draws it, also the parts outside the target (0.4 to 1 ms at
-  512 x 512).
+* A large drawing is rasterized on the thread that draws it: what the clip shows (0.4 to 1 ms for 512 x 512 pixels of
+  it); a zoom makes a part every frame, a scroll one every 256 pixels (a band of it rasterized). No async rasterizing.
+* Icons under a Painter mask stay images: a draw of their own.
+* The four quad programs' generated shaders (GLSL, ESSL, MSL, SPIR-V) are the Vulkan SDK's tools' output: CI's Shaders
+  workflow must make them before a push.
 
 ## Labels at many sub-pixel offsets
 

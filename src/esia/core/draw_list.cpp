@@ -193,6 +193,17 @@ namespace esia
         EndQuads(w);
     }
 
+    void DrawList::AddCoverageQuad(TextureId texture, const Rect& r, Vec2 uv0, Vec2 uv1, std::uint32_t color)
+    {
+        if (r.Empty() || (color >> 24) == 0)
+            return;
+        DrawCmd& c = QuadCommand(texture);
+        quads_.emplace_back().SetCoverage(r, uv0, uv1, color);
+        ++c.count;
+        c.shapes = true;   // the programs that tell it from the glyphs
+        c.vtxBounds = c.vtxBounds.Union(r);
+    }
+
     void DrawList::AddShapeQuad(const QuadInstance& shape, const Rect& bounds)
     {
         if (shape.Alpha() == 0)

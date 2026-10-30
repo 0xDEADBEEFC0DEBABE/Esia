@@ -290,3 +290,41 @@ ESIA_TEST(DrawList, ShapeQuadsJoinQuadsOnAnyTexture)
     ESIA_CHECK(dl.Commands().size() == 3 && dl.Commands()[2].anyTexture);
     dl.PopClipRect();
 }
+
+// Plain coverage (QuadInstance::SetCoverage: an image's alpha in a glyph page, drawn as the image): a glyph's quad with
+// 256 more beside its alpha - exact, the alpha as it was - in the command of the glyphs on its page, which then draws
+// with the programs that tell the two apart (DrawCmd::shapes).
+ESIA_TEST(DrawList, CoverageQuadsJoinTheGlyphsOfTheirPage)
+{
+    QuadInstance q;
+    q.SetCoverage(Rect(1.5f, 2, 3, 4.25f), Vec2(10.0f / 2048.0f, 2047.0f / 2048.0f), Vec2(16.0f / 2048.0f, 1.0f), 0x80FF2010u);
+    ESIA_CHECK(q.packed[0] == 20.0f + 4096.0f * 4094.0f && q.packed[1] == 12.0f + 4096.0f * 2.0f);
+    ESIA_CHECK(q.packed[2] == (float)(0x10 + 256 * 0x20 + 65536 * 0xFF) && q.packed[3] == 256.0f + 128.0f);
+    ESIA_CHECK(q.IsCoverage() && !q.IsShape() && q.Alpha() == 128 && q.Bounds() == Rect(1.5f, 2, 3, 4.25f));
+    QuadInstance glyph;
+    glyph.Set(Rect(0, 0, 1, 1), Vec2(0, 0), Vec2(0, 0), 0xFFFFFFFFu);   // the largest alpha: still a glyph
+    ESIA_CHECK(!glyph.IsCoverage());
+
+    DrawList dl;
+    dl.Reset(Rect(0, 0, 400, 300));
+    dl.AddQuad(42, Rect(12, 12, 18, 22), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
+    ESIA_CHECK(dl.Commands().size() == 1 && !dl.Commands()[0].shapes);
+    dl.AddCoverageQuad(42, Rect(20, 10, 44, 34), Vec2(0, 0), Vec2(0.5f, 0.5f), 0xFF00FF00u);
+    dl.AddQuad(42, Rect(50, 12, 56, 22), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
+    dl.AddCoverageQuad(42, Rect(60, 10, 60, 34), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);   // empty: nothing
+    dl.AddCoverageQuad(42, Rect(60, 10, 70, 34), Vec2(0, 0), Vec2(1, 1), 0x00FFFFFFu);   // transparent: nothing
+    ESIA_CHECK(dl.Commands().size() == 1 && dl.Quads().size() == 3);
+    const DrawCmd& c = dl.Commands()[0];
+    ESIA_CHECK(c.kind == DrawCmdKind::Quads && c.texture == 42 && c.count == 3 && c.shapes && c.vtxBounds == Rect(12, 10, 56, 34));
+    ESIA_CHECK(!dl.Quads()[0].IsCoverage() && dl.Quads()[1].IsCoverage() && dl.Quads()[1].Alpha() == 255 && !dl.Quads()[2].IsCoverage());
+    // on another page: a command of its own; after shapes alone: it gives them its page
+    dl.AddCoverageQuad(43, Rect(20, 40, 44, 64), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
+    ESIA_CHECK(dl.Commands().size() == 2 && dl.Commands()[1].texture == 43 && dl.Commands()[1].shapes);
+    dl.PushClipRect(Rect(0, 0, 100, 100));
+    QuadInstance fill;
+    fill.SetShape(QuadShape::Fill, Rect(10, 10, 50, 30), 4.0f, 0.6f, 0.0f, 0.0f, 0xFF0000FFu);
+    dl.AddShapeQuad(fill);
+    dl.AddCoverageQuad(44, Rect(20, 40, 44, 64), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);
+    ESIA_CHECK(dl.Commands().size() == 3 && dl.Commands()[2].texture == 44 && !dl.Commands()[2].anyTexture && dl.Commands()[2].count == 2);
+    dl.PopClipRect();
+}

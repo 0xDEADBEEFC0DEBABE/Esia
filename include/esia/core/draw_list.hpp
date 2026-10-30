@@ -65,12 +65,13 @@ namespace esia
 
     // A quad as the instanced quad programs read it (rhi::ShaderProgram::QuadImage .. QuadLcdGray, QuadShapeImage ..
     // QuadShapeLcdGray): two float4 rows of the frame's instance data, 32 bytes where a quad of vertices and indices
-    // takes 104 - a textured quad (a glyph, a flat tile: Set) or a plain shape (SetShape), so that shapes and the text
-    // among them draw in one draw. Whole numbers and plain floats, exact in a float, so every shader model decodes them
-    // (SM3 without integers too):
+    // takes 104 - a textured quad (a glyph, a flat tile: Set; a coverage tile drawn as an image: SetCoverage) or a plain
+    // shape (SetShape), so that shapes and the text among them draw in one draw. Whole numbers and plain floats, exact in
+    // a float, so every shader model decodes them (SM3 without integers too):
     //   rect     x0, y0, x1, y1 (UI units); a segment's end points
     //   packed   a textured quad: u0 + 4096 v0, (u1 - u0) + 4096 (v1 - v0) (its uv in 1/4096 - exact for whole texels of
     //            power-of-two textures up to 4096 wide, as glyph pages and tiles are), R + 256 G + 65536 B, A (0 .. 255)
+    //            + 256 for plain coverage (SetCoverage)
     //            a shape: -1 - (kind + 8 (smoothing in 1/1023 + 1024 stroke align in 1/64)), its radius (any float),
     //            R + 256 G + 65536 B, A + 256 stroke width (in 1/64 UI units, below 1024)
     //            a polyline's piece or end: -1 - (kind + 8 (reach + 32 joint)), half its thickness, R + 256 G + 65536 B,
@@ -90,6 +91,17 @@ namespace esia
             PackUv(uv0, uv1, packed);
             PackColor(color, packed + 2);
         }
+        // A textured quad on a coverage page (Alpha8, or a sub-pixel page's gray) whose texels are plain coverage - a
+        // tile of an image's alpha (svg::Draw's icons in the text's pages): drawn in `color` with the texel as its alpha,
+        // the pixels an image of white texels with that alpha gives, none of text's composition (gamma, enhanced
+        // contrast: render::TextComposition). Drawn by the programs that tell quads apart (QuadShape*: the command's
+        // DrawCmd::shapes).
+        void SetCoverage(const Rect& r, Vec2 uv0, Vec2 uv1, std::uint32_t color)
+        {
+            Set(r, uv0, uv1, color);
+            packed[3] += 256.0f;
+        }
+        bool IsCoverage() const { return packed[0] >= 0.0f && packed[3] >= 256.0f; }
         // `r`: the rectangle, or a segment's end points (min = the first, max = the second). Smoothing and align from 0 to
         // 1, the stroke's width below 1024 UI units.
         void SetShape(QuadShape kind, const Rect& r, float radius, float smoothing, float strokeWidth, float strokeAlign, std::uint32_t color)
@@ -226,7 +238,9 @@ namespace esia
         // Quads: plain shapes only so far (they read no texture) - quads on any texture join them, and the first textured
         // one gives the command its texture
         bool anyTexture = false;
-        bool shapes = false;         // Quads: plain shapes among them (the programs that draw shapes; text alone: lighter ones)
+        // Quads: plain shapes or plain coverage among them (the programs that draw shapes and tell quads apart; text
+        // alone: lighter ones)
+        bool shapes = false;
         std::uint32_t first = 0;
         std::uint32_t count = 0;
         EffectId effect = 0;         // Fx
@@ -291,6 +305,9 @@ namespace esia
         void EndQuads(const QuadWriter& w);
         // One quad (an image of a glyph or a tile); nothing for an empty rect or a transparent color.
         void AddQuad(TextureId texture, const Rect& r, Vec2 uv0, Vec2 uv1, std::uint32_t color);
+        // One quad of plain coverage on a coverage page (QuadInstance::SetCoverage: an image's alpha in the text's pages),
+        // in the command of the text on that page; nothing for an empty rect or a transparent color.
+        void AddCoverageQuad(TextureId texture, const Rect& r, Vec2 uv0, Vec2 uv1, std::uint32_t color);
         // A plain shape (QuadInstance::SetShape) in the current clip rect: it joins the quads before it whatever their
         // texture, so a shape among labels takes no draw of its own. Nothing for a transparent color. `bounds`: what
         // it draws on, as QuadInstance::Bounds gives it (a caller that knows them saves decoding them).

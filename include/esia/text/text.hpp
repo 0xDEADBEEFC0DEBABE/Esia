@@ -266,8 +266,9 @@ namespace esia::text
             const Color fill(material.fill0[0], material.fill0[1], material.fill0[2], material.fill0[3] * material.misc[0]);
             return Draw(dl, font, pos, fill, text, wrapWidth, flags, scale);
         }
-        // Coverage tiles other than glyphs, in the texture text is drawn with (the corners of Painter's flat shapes, so
-        // they batch with the text) and kept apart from the glyphs: the tile cached under `key`, else null; AddTile packs
+        // Coverage tiles other than glyphs, in the texture text is drawn with (the corners of Painter's flat shapes, the
+        // masks of SVG icons that last - drawn as images of it, DrawList::AddCoverageQuad - so they batch with the text)
+        // and kept apart from the glyphs, under the caller's keys: the tile cached under `key`, else null; AddTile packs
         // one the caller rasterized (8-bit coverage). Gone when the glyph pages start over. Null from both: no tiles.
         virtual const GlyphSlot* FindTile(std::uint64_t key)
         {
@@ -281,7 +282,7 @@ namespace esia::text
             return nullptr;
         }
         // Changes when the tiles found so far are gone (the pages started over), and differs between text systems (one
-        // made where another was): a caller may keep their slots while it stays.
+        // made where another was): a caller may keep their slots while it stays. 0: a text system without tiles.
         virtual std::uint64_t TileGeneration() { return 0; }
 
         // ---- editing
