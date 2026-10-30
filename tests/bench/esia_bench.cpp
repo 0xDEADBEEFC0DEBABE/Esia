@@ -2,15 +2,20 @@
 // to submit (Renderer::Render: plan, upload, commands), and what it costs the GPU where the device has timestamps.
 //
 //   esia_bench [--backend d3d11] [--scene all|text|widgets|widgets-flat|shapes|glass|...] [--frames 600] [--warmup 60]
-//              [--size 1600x1000] [--hdr]
+//              [--size 1600x1000] [--hdr] [--light]
 //
 // The glass scenes: as they are, with RenderParams::targetStatic (unchanged captures reused), with a background that
-// scrolls under the glass ("live"), and that with captures reused for two frames (RenderParams::backdropReuseFrames).
+// scrolls under the glass ("live"), and that with captures reused for two frames (RenderParams::backdropReuseFrames);
+// and glass with drop shadows, as the widgets draw windows and bars ("glass-shadow"). "shapes-fx" draws the plain shapes
+// as FX instances. --light puts one UI light (RenderParams::light) over the middle of the target, as glass_window's
+// --light puts it at the cursor.
 //
 // Every frame draws the same scene at a fixed clock. The GPU finishes each frame before the next one starts (a
 // one-pixel readback outside the timed parts), so a queue that fills up does not skew the CPU times. Printed per
-// scene: the median and the 99th percentile of each part over the frames after the warm-up, the draw calls and what
-// a frame uploads. Compare two builds by alternating their runs on the same machine, not by absolute numbers.
+// scene: the median and the 99th percentile of each part over the frames after the warm-up, the medians of the GPU
+// time of the backdrop captures (copy and pyramid) and of the FX batches with glass (every category switch timed:
+// RenderParams::maxProfileScopes 1024), the draw calls and what a frame uploads. Compare two builds by alternating
+// their runs on the same machine, not by absolute numbers.
 #include "esia/core/texture.hpp"
 #include "esia/render/painter.hpp"
 #include "esia/render/renderer.hpp"
@@ -101,7 +106,8 @@ namespace
             }
     }
 
-    // Ten thousand small rounded rectangles with a stroke (FX instances).
+    // Ten thousand small rounded rectangles with a stroke: plain shapes as quads, or as FX instances (shapes-fx:
+    // PainterEnv::quadShapes off).
     void ShapeScene(Painter& p, const Bench& b)
     {
         const int cols = 125, rows = 80;
@@ -114,8 +120,9 @@ namespace
             }
     }
 
-    // Twenty frosted glass panels with a title each over colored stripes (scrolling when live).
-    void GlassScene(Painter& p, const Bench& b)
+    // Twenty frosted glass panels with a title each over colored stripes (scrolling when live), with a drop shadow each
+    // (glass-shadow).
+    void GlassPanels(Painter& p, const Bench& b, bool shadows)
     {
         const float band = b.height / 16.0f, shift = b.live ? (float)std::fmod(b.time * 90.0, (double)band) : 0.0f;
         for (int i = -1; i < 16; ++i)
@@ -127,10 +134,16 @@ namespace
             for (int c = 0; c < 5; ++c)
             {
                 const esia::Rect box = esia::Rect::FromSize(Vec2(10.0f + (float)c * (w + 10.0f), 10.0f + (float)r * (h + 10.0f)), Vec2(w, h));
-                p.Rect(box, Style().Radius(24.0f).Glass(g));
+                Style s = Style().Radius(24.0f).Glass(g);
+                if (shadows)
+                    s.Shadow(Color::Black(0.35f), 20.0f, Vec2(0.0f, 8.0f));
+                p.Rect(box, s);
                 p.Text(box.min + Vec2(18.0f, 16.0f), text::FontRef{b.font, 17.0f}, Color::White(), kLines[(r * 5 + c) % 8]);
             }
     }
+
+    void GlassScene(Painter& p, const Bench& b) { GlassPanels(p, b, false); }
+    void GlassShadowScene(Painter& p, const Bench& b) { GlassPanels(p, b, true); }
 
     struct SceneDef
     {
@@ -140,16 +153,19 @@ namespace
         bool live = false;
         bool targetStatic = false;   // RenderParams::targetStatic
         int reuseFrames = 0;         // RenderParams::backdropReuseFrames
+        bool fxShapes = false;       // plain shapes as FX instances (PainterEnv::quadShapes off)
     };
     const SceneDef kScenes[] = {
         {"text", &TextScene},
         {"widgets", &WidgetScene},
         {"widgets-flat", &WidgetScene, true},
         {"shapes", &ShapeScene},
+        {"shapes-fx", &ShapeScene, false, false, false, 0, true},
         {"glass", &GlassScene},
         {"glass-static", &GlassScene, false, false, true},
         {"glass-live", &GlassScene, false, true},
         {"glass-live-2", &GlassScene, false, true, false, 2},
+        {"glass-shadow", &GlassShadowScene},
     };
 
     const char* DefaultBackend()
@@ -168,7 +184,8 @@ int main(int argc, char** argv)
 {
     std::string backend = DefaultBackend(), scene = "all", fonts = ESIA_BENCH_FONT_DIR;
     int frames = 600, warmup = 60, width = 1600, height = 1000;
-    bool hdr = false;   // an RGBA16_FLOAT target, the frame encoded as scRGB (RenderParams::hdr)
+    bool hdr = false;     // an RGBA16_FLOAT target, the frame encoded as scRGB (RenderParams::hdr)
+    bool light = false;   // one UI light over the middle of the target (RenderParams::light)
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
@@ -187,10 +204,12 @@ int main(int argc, char** argv)
             fonts = argv[++i];
         else if (a == "--hdr")
             hdr = true;
+        else if (a == "--light")
+            light = true;
         else
         {
-            std::fprintf(stderr, "usage: esia_bench [--backend name] [--scene all|text|widgets|widgets-flat|shapes|glass] [--frames n] "
-                                 "[--warmup n] [--size WxH] [--fonts dir] [--hdr]\n");
+            std::fprintf(stderr, "usage: esia_bench [--backend name] [--scene all|text|widgets|widgets-flat|shapes|glass|...] [--frames n] "
+                                 "[--warmup n] [--size WxH] [--fonts dir] [--hdr] [--light]\n");
             return 2;
         }
     }
@@ -244,10 +263,10 @@ int main(int argc, char** argv)
     b.height = (float)height;
 
     const bool readback = hdev.device->GetCaps().readback;
-    std::printf("esia_bench: %s on %s, %d x %d, %d frames after %d of warm-up%s\n", backend.c_str(), hdev.adapter.empty() ? "?" : hdev.adapter.c_str(),
-                width, height, frames, warmup, readback ? "" : " (no readback: the GPU is not waited for)");
-    std::printf("%-13s %-17s %-17s %-17s %6s %9s %9s %7s %7s %10s %9s\n", "scene", "build ms (p50/99)", "submit ms", "gpu ms", "draws", "vertices",
-                "indices", "quads", "fx", "upload KB", "captures");
+    std::printf("esia_bench: %s on %s, %d x %d, %d frames after %d of warm-up%s%s\n", backend.c_str(), hdev.adapter.empty() ? "?" : hdev.adapter.c_str(),
+                width, height, frames, warmup, light ? ", a UI light" : "", readback ? "" : " (no readback: the GPU is not waited for)");
+    std::printf("%-13s %-17s %-17s %-17s %7s %7s %6s %9s %9s %7s %7s %10s %9s\n", "scene", "build ms (p50/99)", "submit ms", "gpu ms", "capture", "glass",
+                "draws", "vertices", "indices", "quads", "fx", "upload KB", "captures");
     for (const SceneDef& sd : kScenes)
     {
         if (scene != "all" && scene != sd.name)
@@ -256,15 +275,19 @@ int main(int argc, char** argv)
         PainterEnv env;
         env.text = ts.get();
         env.flat = sd.flat;
+        env.quadShapes = !sd.fxShapes;
         b.live = sd.live;
         render::RenderParams params;
         params.targetStatic = sd.targetStatic;
         params.backdropReuseFrames = sd.reuseFrames;
+        params.maxProfileScopes = 1024;   // every category switch timed (the default stops after 32)
         if (hdr)
             params.hdr.encoding = render::HdrEncoding::ScRgb;
+        if (light)
+            params.light = render::UiLight::Point(Vec2(b.width * 0.5f, b.height * 0.5f), 240.0f);
         int captures = 0, reused = 0, restored = 0;
         DrawList dl;
-        Series build, submit, gpu;
+        Series build, submit, gpu, gpuCapture, gpuGlass;
         std::uint64_t lastGpuFrame = 0;
         std::vector<std::uint8_t> pixel;
         render::RenderStats last;
@@ -304,17 +327,21 @@ int main(int argc, char** argv)
             if (last.gpu.valid && last.gpu.frame != lastGpuFrame)
             {
                 gpu.v.push_back(last.gpu.totalMs);
+                gpuCapture.v.push_back(last.gpu.categoryMs[(int)rhi::ProfileCategory::Capture]);
+                gpuGlass.v.push_back(last.gpu.categoryMs[(int)rhi::ProfileCategory::FxGlass]);
                 lastGpuFrame = last.gpu.frame;
             }
         }
-        char cols[3][32];
-        Series* parts[3] = {&build, &submit, &gpu};
-        for (int i = 0; i < 3; ++i)
+        char cols[5][32];
+        Series* parts[5] = {&build, &submit, &gpu, &gpuCapture, &gpuGlass};
+        for (int i = 0; i < 5; ++i)
         {
             if (parts[i]->v.empty())
                 std::snprintf(cols[i], sizeof(cols[i]), "-");
-            else
+            else if (i < 3)
                 std::snprintf(cols[i], sizeof(cols[i]), "%.3f / %.3f", parts[i]->At(0.5), parts[i]->At(0.99));
+            else
+                std::snprintf(cols[i], sizeof(cols[i]), "%.3f", parts[i]->At(0.5));
         }
         const double kb = ((double)last.vertices * sizeof(Vertex) + (double)last.indices * 4.0 + (double)last.quads * sizeof(QuadInstance) +
                            (double)last.fxInstances * sizeof(fx::Instance)) /
@@ -322,8 +349,8 @@ int main(int argc, char** argv)
         char caps[48];   // per frame: taken + reused (of them restored from their copy aside)
         std::snprintf(caps, sizeof(caps), "%.1f+%.1f(%.1f)", (double)captures / (double)frames, (double)reused / (double)frames,
                       (double)restored / (double)frames);
-        std::printf("%-13s %-17s %-17s %-17s %6d %9d %9d %7d %7d %10.1f %9s\n", sd.name, cols[0], cols[1], cols[2], last.drawCalls, last.vertices,
-                    last.indices, last.quads, last.fxInstances, kb, caps);
+        std::printf("%-13s %-17s %-17s %-17s %7s %7s %6d %9d %9d %7d %7d %10.1f %9s\n", sd.name, cols[0], cols[1], cols[2], cols[3], cols[4],
+                    last.drawCalls, last.vertices, last.indices, last.quads, last.fxInstances, kb, caps);
     }
     return 0;
 }

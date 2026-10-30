@@ -42,6 +42,11 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**Glass shading cost** (2026-10-30, in Esia): what glass costs the GPU - the UI light nothing measurable (the shader paid
+for it with or without it), a panel's backdrop capture 9 to 11 us, mostly its passes' fixed cost - and glass shaded 5 to
+8 % faster on Direct3D 11 / 12, Vulkan and OpenGL with the same pixels: the light's direction and the rim's light computed
+only where they are used, the bevel's normal from one corner.
+
 **SVG to textures** (2026-10-30, in Esia): SVG files parsed once and rasterized at the size drawn into texture pages, with
 exact area coverage (overlaps, both fill rules and a stroke's pieces resolved in the sweep); monochrome icons as one mask
 in any color; a 16-pixel icon in 7 us.
@@ -153,6 +158,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Glass shading cost](#glass-shading-cost)
 * [SVG to textures](#svg-to-textures)
 * [Polylines on the processor's vectors](#polylines-on-the-processors-vectors)
 * [Labels at many sub-pixel offsets](#labels-at-many-sub-pixel-offsets)
@@ -195,6 +201,91 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Glass shading cost
+
+What liquid glass costs the GPU - its shading with and without the UI light (RenderParams::light), and its backdrop
+captures - and its shading made cheaper without a pixel changing (2026-10-30). RTX 4080 SUPER, Release clang-cl.
+
+### Measured first
+
+`esia_bench` prints two more medians: the GPU time of the backdrop captures (`capture`: the copy and the pyramid) and of
+the FX batches with glass (`glass`), every category switch timed (`maxProfileScopes` 1024). `--light` puts a point
+light over the middle of the target; the scene `glass-shadow` is the glass scene (20 frosted panels with titles) with a
+drop shadow under each panel, as the widgets draw windows and bars; `shapes-fx` draws the 10 000 plain shapes as FX
+instances. At 2808 x 2100 the glass scene takes one capture and its shading is most of the frame; at 1600 x 1000 every
+panel captures again (20 captures).
+
+* The UI light costs nothing measurable: glass 0.223 ms with it and without, on Direct3D 11 and 12. Not because it is
+  free: FxPS computed the UI light's direction and the glass's own one in every pixel (a `?:` on the light, which fxc
+  compiles as both sides and a `movc`), the drop shadow's offset likewise, so a frame without the light paid for it all
+  the same. All of the light's terms together - the direction, the rim's two powers, the side of the slab facing it -
+  were 5 % of the glass's time (taken out in a test build).
+* The glass's shading in parts, each taken out in turn (Direct3D 11, 2808 x 2100): the backdrop as two B-spline levels
+  instead of one bilinear read 25 %, the bevel's normal (four distances a pixel, over a quarter of a panel) 8.5 %,
+  the light's terms 5 %, vibrancy and veil 3 %, the rim's reflection 2.5 %, the rim's Fresnel average 2 %; FxPS outside
+  the glass body (the distance, coverage, the rim's hairline, grain, the output) about 35 %; the quads with an empty
+  pixel shader 9 %.
+* The captures: at 1600 x 1000 the 20 captures take 0.22 ms (Direct3D 11) and 0.18 ms (Direct3D 12), more than the
+  panels' shading (0.14 / 0.13 ms) - 9 to 11 us each, most of it the fixed cost of its four downsample passes, each
+  waiting for the one before (one capture of the whole 2808 x 2100 target: 0.04 ms). Not changed here (Not done).
+
+### What changed (esia_fx.hlsl, esia_common.hlsli)
+
+* The light's direction is a branch on the light: the UI light's (per pixel for a point light) or the glass's own
+  angle's, not both and a select; the drop shadow's offset likewise (`ShadowOffset`).
+* The rim's light - two powers - only where the rim has light: in the band along the outline where the pixel's Fresnel
+  average is computed. Elsewhere the rim was 0 times them.
+* The bevel's normal: a rounded rect with one radius on every corner (most glass) takes its four distances from one
+  corner, without ShapeSD's dispatch over the shape kinds. `SdRoundRect` is two functions now - `RoundRectCorner`, the
+  corner of the quadrant a point lies in (its reach and smoothing), and `SdRoundRectCorner`, the distance from it -
+  and with one radius the four points' corners are one: the same operations on the same numbers. Not on SM3: the full
+  ps_3_0 shader keeps one copy of the distances (3921 of NVIDIA's 4096 instruction slots; 4121 with a second).
+
+Every change computes the same values in the same order where it computes them. Glass GPU ms, the build before and after
+alternated, 10 rounds of 600 frames (1600 x 1000: 8; Vulkan, OpenGL: 6), medians of the rounds' medians - no two rounds
+of a cell more than 0.002 ms apart:
+
+| 2808 x 2100 | Direct3D 11 | Direct3D 12 | Vulkan | OpenGL |
+| --- | --- | --- | --- | --- |
+| glass | 0.223 -> 0.208 (-6.7 %) | 0.223 -> 0.208 (-6.7 %) | 0.238 -> 0.220 (-7.6 %) | 0.245 -> 0.228 (-6.7 %) |
+| glass, UI light | 0.223 -> 0.209 (-6.3 %) | 0.223 -> 0.210 (-5.6 %) | 0.238 -> 0.222 (-6.7 %) | 0.245 -> 0.230 (-6.1 %) |
+| glass-shadow | 0.263 -> 0.246 (-6.5 %) | 0.263 -> 0.247 (-6.3 %) | 0.281 -> 0.260 (-7.5 %) | 0.293 -> 0.275 (-6.1 %) |
+| glass-shadow, UI light | 0.263 -> 0.249 (-5.3 %) | 0.263 -> 0.249 (-5.3 %) | | |
+
+The frame -4 to -5 % on Direct3D 11 / 12. At 1600 x 1000 glass 0.139 -> 0.128 ms (Direct3D 11) and 0.134 -> 0.126
+(Direct3D 12), glass-shadow 0.148 -> 0.137 and 0.152 -> 0.141, the captures as they were. WARP (Direct3D 11, a CPU
+rasterizer: arithmetic weighs more there), 1600 x 1000, 5 rounds: 24.96 -> 23.34 ms (-6.5 %). `shapes-fx` (FX shapes
+without glass, 14 rounds): 0.325 -> 0.324 ms (Direct3D 11), 0.333 -> 0.330 (Direct3D 12), the same. With the light the
+glass now costs 0.001 - 0.003 ms more than without it: its direction per pixel, which glass without the light no longer
+computes.
+
+### Verified
+
+* Every conformance scene rendered by the build before and after on Direct3D 9, 10, 11 and 12 (RTX 4080 SUPER and WARP),
+  OpenGL, GLES and Vulkan (the last three with the shader library regenerated by the same local tools for both builds):
+  identical, pixel for pixel; the goldens unchanged.
+* ctest 42 / 42 (clang-cl Debug, `-DESIA_WERROR=ON`) with the library as it is and regenerated; Direct3D 10 / 11 / 12
+  with the debug layers, 3 frames: no message; MSVC `/W4 /WX`; the GNU flags on esia_bench.
+* fxc /O3: ps_5_0 FxPS 23 temporaries before and after, 3406 -> 3569 instruction slots (the second copy of the four
+  distances: a glass pixel runs fewer instructions, the shader holds more), ps_4_0 3465 -> 3632; ps_3_0 31 registers,
+  3910 -> 3921 slots; FxVS unchanged.
+
+### Not done
+
+* The glass body's four instance rows (glass, tint, its parameters, the loupe) as flat varyings: on Direct3D 11 those
+  four structured-buffer reads a pixel are 6 % of the glass's time (Direct3D 12's root SRV: 1 %), but four more
+  varyings cost every other FX shape 2.5 % (Direct3D 11) and 4.5 % (Direct3D 12) in `shapes-fx`; two of them in the
+  solid area's varyings (a glass has none) cost it 4 - 5 %.
+* FX feature variants on Direct3D 10 - 12 (`Caps::fxFeatureVariants`): the glass scene drawn with a variant of fill,
+  stroke, shadow, glass, mask and grain (21 temporaries instead of 23, 2540 instruction slots instead of 3406) was 9 %
+  faster; a variant is another compile, not bound to round as the full shader does, and is built at run time.
+* The pyramid's last level: `LevelsForBlur` builds the level after a blur's own even where the shader reads that one
+  alone (a radius at a power of two: the rim reflection's 16 units at scales 1 and 2). Not building a level no glass
+  reads took 17 % off the captures (20 of them, 1600 x 1000, a test build); it changes the null device's command
+  goldens.
+* An integrated GPU: the Ryzen's is off in the BIOS. Its arithmetic is scarcer: what was cut here should weigh more
+  there.
 
 ## SVG to textures
 
