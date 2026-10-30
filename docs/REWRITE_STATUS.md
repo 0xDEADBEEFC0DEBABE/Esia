@@ -90,7 +90,9 @@ into its hinting when it stops; a halo of the other tone where the backdrop come
 
 **Distance-field text** (2026-10-28, in Esia): Esia's own MTSDF generator (overlapping contours resolved, sharp
 corners), glyphs as FX shapes with every Painter material (`Painter::Text` with a `Style`: outlines, glows,
-shadows, gradients, glass, weight) on every backend, large text from fields by itself.
+shadows, gradients, glass, weight) on every backend, large text from fields by itself. Since 2026-10-30 the fields of a
+text's new glyphs are made at once on worker threads (a paragraph of 200 new glyphs: 77 -> 8 ms on 16 cores, the same
+bits) and can be kept on disk between runs.
 
 **Sub-pixel text** (2026-10-28, in Esia): LCD antialiasing again, from either rasterizer with FreeType's filters,
 dual-source blending on every backend but Direct3D 9, the grayscale fallback in glow layers; the ClearType setup of
@@ -948,6 +950,25 @@ now be drawn from multi-channel signed distance fields made by Esia, as FX shape
   Direct3D 9 the full ps_3_0 shader has no registers left for it), so glyph batches build their variant at once.
 * Painter: `Material()` out of `EmitShape` (shapes unchanged), `Text` / `TextBox` with a `Style`, `Style::Weight`.
   glass_window's text wrappers pass `DrawShapes` and `DrawOutline` on (outlines did not reach the inner system).
+* Without the hitch (2026-10-30). A text that appears with glyphs the field atlas does not have had their fields made
+  one by one on the UI thread, in its draw: 0.37 ms a Latin glyph, 0.58 a Chinese one (Release), so a paragraph of 200
+  new glyphs held its frame for 75 to 120 ms. `FieldMaker` (`distance_field.hpp`) makes the fields of a batch together:
+  worker threads (one per processor but one, at most 15: `FreeTypeDesc::fieldThreads`, 0 = the UI thread alone) start
+  on a shape as soon as it is handed over, and the thread that waits makes the rest with them - `GenerateMtsdf` itself,
+  the same bits on every thread. `DrawShapes` looks up every glyph's field once before its passes, reads the new
+  glyphs' outlines on the UI thread (FreeType's faces stay there), makes them as one batch and packs them in the order
+  the passes meet them: the fields, their places in the atlas and every instance are what the one-by-one way gave.
+* A cache on disk, off by default (`FreeTypeDesc::fieldCacheDirectory`): each field a file named by what makes its
+  bits - every point of the outline as the generator gets it, the ranges, `kDistanceFieldVersion` (raised when the
+  generator's output changes), the kind of processor and compiler -, so another font file, face, variable instance or
+  range never finds a field that is not its own (the outline is what a font file's content decides of a field). The file
+  holds a check of that key and one of its texels: a damaged, cut or swapped file is made again and written anew. The
+  workers read it; one of them writes the new fields afterwards, behind any batch, beside their place and renamed over.
+* The generator's search, bit for bit the same: the pieces of each cell in one array, each piece's direction made once,
+  the tie-breaking angle worked out only for the pieces close enough to need it - 11 % less time a field.
+* `esia_field_bench` (`tests/bench/field_bench.cpp`): the draw that meets a paragraph of new glyphs against the same
+  paragraph again - with a style, from a cache, as frames on a backend; `--digest` hashes every glyph's field of a font,
+  to compare two builds' generators bit for bit.
 
 ### Verified
 
@@ -960,13 +981,59 @@ now be drawn from multi-channel signed distance fields made by Esia, as FX shape
   Vulkan within 2 levels of the D3D11 golden (D3D9 through its variant); ctest 36 / 36.
 * glass_window with a title in white with a blue outline, a pink glow and a shadow (Latin and Chinese), a gradient
   across a word and glass text, on Direct3D 11.
+* The hitch's work (2026-10-30): `FieldMaker.SameBitsAsMadeOneByOne` (corners, holes, overlaps, curves, a star, an
+  empty shape and one too large; 0, 3 and 8 workers, batch after batch), `FieldMaker.CacheOnDiskKeepsTheSameFields` (a
+  second maker reads every field, the same bits; another range, a point moved by one float step, a texel changed, a
+  file cut short or grown, another field's file under its name: made again, and the file put right),
+  `FreeTypeRendering.FieldsFromWorkersAndDiskAreTheSame` (three texts sharing and repeating glyphs, Latin and Chinese:
+  instances, the draws' pages and the field page byte for byte from 0, 3 and 15 workers and from the cache). The
+  generator's change: the fields of every glyph of 18 fonts - the test fonts, Segoe UI, Microsoft YaHei, SimSun,
+  Malgun Gothic, the variable Noto Sans SC, Bahnschrift, Cascadia Code and Sitka, Segoe Fluent Icons, Segoe UI Symbol
+  and Emoji, Georgia, Times New Roman, Consolas, Arial: 240 000 fields - hash as 9df4411's. Every test (clang-cl Debug,
+  every backend, the conformance goldens with `text_fields` among them): 43 / 43; MSVC `/W4 /WX`; the GNU flags on the
+  changed files.
+
+### Measured
+
+`esia_field_bench`, Release clang-cl, Ryzen 9 7950X (16 cores), against 9df4411 alternated run by run: 5 runs of 5 to 9
+rounds, each a new text system. Medians of the runs' medians, in brackets the fastest and the slowest round; the draw
+that meets the paragraph, once its text system has drawn fields before (the first fields also create the field page:
+16 MB zeroed, 2 to 2.5 ms of that first draw, now as before):
+
+| a paragraph of new glyphs, 48 px | before | now |
+| --- | --- | --- |
+| 200 Latin (DroidSans) | 76.5 ms (74.8 .. 84.9) | 7.7 ms (6.5 .. 9.9) |
+| 200 Chinese (Microsoft YaHei) | 119.6 ms (117.3 .. 124.6) | 11.2 ms (10.3 .. 13.7) |
+| 30 Latin with a style (fill, stroke outside, shadow) | 10.3 ms (9.3 .. 11.4) | 1.7 ms (1.5 .. 2.1) |
+| 10 Latin with a style | 2.7 ms (2.5 .. 3.2) | 0.9 ms (0.7 .. 1.2) |
+| 200 Latin, the UI thread alone (`fieldThreads` 0) | 77.2 ms (75.1 .. 83.1) | 67.7 ms (66.6 .. 72.3) |
+| 200 Latin, read from the cache | | 3.9 ms (3.5 .. 5.0) |
+| 200 Chinese, read from the cache | | 5.0 ms (4.6 .. 6.1) |
+
+* The frame on Direct3D 11 (200 Latin with a style): draw 74.9 -> 7.2 ms, then 1.5 ms of submit, before and now (the
+  new texels go up as a cell each).
+* Drawn again, every field made: the same or less (one look-up a glyph for both passes): 0.077 -> 0.053 ms for 200
+  glyphs with a fill.
+* Where the time goes now, 200 Latin glyphs: their outlines on the UI thread 0.7 to 1 ms (overlapping the workers'
+  start), the fields 5 to 6 ms on 16 threads (10 to 12 times one thread's), packing into the atlas 0.8 to 1 ms. 31
+  workers instead of 15: 6.4 ms. A few glyphs wait for the slowest of them, 0.3 to 0.9 ms.
+* The cache on Windows: a file read for the first time after it was written is scanned by the virus scanner
+  (Defender), which makes the run after the one that wrote them no faster than making the fields; from the run after
+  that on, the times above. A run that writes is about 1 ms slower per 200 new fields (looking for files that are not
+  there).
 
 ### Not done
 
-* Fields are made when first drawn, on the UI thread (3 ms per glyph in a debug build): no background generation or
-  cache on disk yet.
 * Glows and shadows reach a quarter em from the field; farther they follow the glyph's box (use a glow layer).
 * Per-glyph shadows of neighbouring glyphs add up where they overlap (no union of the whole text's shadow).
+* Fields are not made ahead (a font's common glyphs in the background before they are drawn): a few new glyphs still
+  wait for the slowest one's field (up to 0.9 ms), a paragraph of 200 for 5 to 8 ms.
+* The generator on vectors (the texels of a cell share their pieces): it would have to give the same bits on every
+  level, as the polylines' loops do.
+* The field page is created as 16 MB of zeros on the CPU and uploaded whole (2 to 2.5 ms of the first field draw, more
+  to upload); a new field's texels go up as a cell each (1.5 ms of submit for 200 on Direct3D 11).
+* The cache keeps every field it is given (as the D3D shader cache, nothing is ever removed), one file each; on Windows
+  each costs an open (66 us on one thread).
 
 ## Sub-pixel text
 

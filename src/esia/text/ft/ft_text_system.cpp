@@ -47,6 +47,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace esia::text
@@ -422,7 +423,7 @@ namespace esia::text
                 : atlas_(textures, GlyphAtlasDesc{desc.atlasPageSize, desc.atlasMaxPages, 1}),
                   colorAtlas_(textures, GlyphAtlasDesc{std::min(desc.atlasPageSize, 1024), 2, 1, TextureFormat::RGBA8}),
                   fieldAtlas_(textures, GlyphAtlasDesc{desc.atlasPageSize, 2, 1, TextureFormat::RGBA8, TextureFlags_DistanceField}),
-                  rendering_(desc.rendering), pending_(desc.rendering)
+                  fields_(FieldMakerDesc{desc.fieldThreads, desc.fieldCacheDirectory}), rendering_(desc.rendering), pending_(desc.rendering)
             {
             }
 
@@ -860,17 +861,19 @@ namespace esia::text
                 const float k = font.size * scale / kFieldEm;   // UI units per field pixel
                 // the text's box: what paints, glass and shimmer span (a gradient across the text, not each glyph)
                 const Vec2 box = layout->metrics.size * scale;
+                constexpr std::uint32_t kDrawn = fx::kFill | fx::kStroke | fx::kShadow | fx::kGlow | fx::kInnerGlow | fx::kGlass | fx::kCustom | fx::kLegible;
+                if (((under | faces) & kDrawn) != 0)
+                    FieldSlots(*layout);
                 for (const std::uint32_t pass : {under, faces})
                 {
-                    if ((pass & (fx::kFill | fx::kStroke | fx::kShadow | fx::kGlow | fx::kInnerGlow | fx::kGlass | fx::kCustom | fx::kLegible)) == 0)
+                    if ((pass & kDrawn) == 0)
                         continue;
-                    for (const PlacedGlyph& g : layout->glyphs)
+                    for (std::size_t gi = 0; gi < layout->glyphs.size(); ++gi)
                     {
-                        if (g.glyph == kNoGlyph || !Outlined(g.face))
-                            continue;
-                        const GlyphSlot* s = FieldGlyph(g.face, g.glyph);
+                        const GlyphSlot* s = fieldSlots_[gi];
                         if (!s || !s->page)
                             continue;
+                        const PlacedGlyph& g = layout->glyphs[gi];
                         const Vec2 pen = pos + g.pos * scale;
                         fx::Instance inst = material;
                         inst.rect[0] = pos.x;
@@ -966,14 +969,53 @@ namespace esia::text
                 set.classCount = 0;
             }
 
-            // The glyph's distance field (MTSDF at kFieldEm pixels per em, the design's outline), made the first time.
-            const GlyphSlot* FieldGlyph(std::uint16_t face, std::uint16_t glyph)
+            // Every glyph's distance field (MTSDF at kFieldEm pixels per em, the design's outline) into fieldSlots_, by the
+            // glyph's index in the layout (null: none, a glyph without an outline); the missing ones made first.
+            void FieldSlots(const Layout& layout)
             {
-                const std::uint64_t key = ((std::uint64_t)face << 16) | glyph;
-                if (const GlyphSlot* s = fieldAtlas_.Find(key))
-                    return s;
+                fieldSlots_.assign(layout.glyphs.size(), nullptr);
+                fieldMissing_.clear();
+                for (std::size_t i = 0; i < layout.glyphs.size(); ++i)
+                {
+                    const PlacedGlyph& g = layout.glyphs[i];
+                    if (g.glyph == kNoGlyph || !Outlined(g.face))
+                        continue;
+                    if (!(fieldSlots_[i] = fieldAtlas_.Find(FieldKey(g.face, g.glyph))))
+                        fieldMissing_.push_back(i);
+                }
+                if (fieldMissing_.empty())
+                    return;
+                // The fields of the text's new glyphs, made together (a text that appears with many: the hitch of its
+                // frame): their outlines read here (FreeType's faces belong to this thread), handed to the workers as
+                // they come, made by them and this thread at once; then packed in the order the passes meet them, as
+                // when each was made at its first draw.
+                for (const std::size_t i : fieldMissing_)
+                {
+                    const PlacedGlyph& g = layout.glyphs[i];
+                    const std::uint64_t key = FieldKey(g.face, g.glyph);
+                    if (!fieldBatchKeys_.insert(key).second)
+                        continue;   // made for an earlier one
+                    GlyphShape shape;
+                    FieldShape(g.face, g.glyph, shape);
+                    fieldBatch_.push_back({key, shape.Bounds()});
+                    fields_.Add(std::move(shape), kFieldDesc);
+                }
+                fields_.Make();
+                for (std::size_t b = 0; b < fieldBatch_.size(); ++b)
+                    AddField(fieldBatch_[b].key, fields_.Field(b), fieldBatch_[b].ink);
+                fieldBatch_.clear();
+                fieldBatchKeys_.clear();
+                for (const std::size_t i : fieldMissing_)
+                    fieldSlots_[i] = fieldAtlas_.Find(FieldKey(layout.glyphs[i].face, layout.glyphs[i].glyph));
+            }
+
+            static std::uint64_t FieldKey(std::uint16_t face, std::uint16_t glyph) { return ((std::uint64_t)face << 16) | glyph; }
+
+            // The glyph's design outline in field pixels (kFieldEm per em), y down: what its field is made from.
+            void FieldShape(std::uint16_t face, std::uint16_t glyph, GlyphShape& shape)
+            {
                 Face& f = *faces_[face];
-                shape_.Clear();
+                shape.Clear();
                 if (f.platform)
                 {
                     // the platform's outline is flattened already: its points joined by lines
@@ -984,9 +1026,9 @@ namespace esia::text
                         const std::span<const Vec2> pts = outline_.Contour(c);
                         if (pts.empty())
                             continue;
-                        shape_.MoveTo(pts[0]);
+                        shape.MoveTo(pts[0]);
                         for (std::size_t i = 1; i < pts.size(); ++i)
-                            shape_.LineTo(pts[i]);
+                            shape.LineTo(pts[i]);
                     }
                 }
                 else if (FT_Load_Glyph(f.ft, glyph, FT_LOAD_NO_SCALE | FT_LOAD_NO_BITMAP) == 0 && f.ft->glyph->format == FT_GLYPH_FORMAT_OUTLINE)
@@ -996,22 +1038,19 @@ namespace esia::text
                     funcs.line_to = &ShapeLineTo;
                     funcs.conic_to = &ShapeConicTo;
                     funcs.cubic_to = &ShapeCubicTo;
-                    ShapeSink sink{&shape_, kFieldEm / f.upem};
+                    ShapeSink sink{&shape, kFieldEm / f.upem};
                     FT_Outline_Decompose(&f.ft->glyph->outline, &funcs, &sink);
                 }
-                GlyphBitmap field;
-                if (!GenerateMtsdf(shape_, kFieldDesc, field))
-                {
-                    field = GlyphBitmap{};   // larger than a field may be: cached as empty
-                    field.channels = 4;
-                    field.sdf = true;
-                }
-                if (const GlyphSlot* s = fieldAtlas_.Add(key, field, shape_.Bounds()))
-                    return s;
-                GlyphBitmap none;   // larger than a page
+            }
+
+            // A field made (null: GenerateMtsdf refused it) into the field atlas under `key`
+            void AddField(std::uint64_t key, const GlyphBitmap* field, const Rect& ink)
+            {
+                GlyphBitmap none;   // larger than a field may be, or than a page: cached as empty
                 none.channels = 4;
                 none.sdf = true;
-                return fieldAtlas_.Add(key, none, Rect());
+                if (!fieldAtlas_.Add(key, field ? *field : none, ink))
+                    fieldAtlas_.Add(key, none, Rect());
             }
 
             void DrawOutline(DrawList& dl, FontRef font, Vec2 pos, const TextOutline& outline, std::string_view text, float wrapWidth, std::uint32_t flags,
@@ -2696,7 +2735,16 @@ namespace esia::text
             GlyphAtlas atlas_;
             GlyphAtlas colorAtlas_;   // RGBA8: color glyphs
             GlyphAtlas fieldAtlas_;   // RGBA8: distance fields (one per glyph, every size)
-            GlyphShape shape_;        // a glyph's outline for its field
+            FieldMaker fields_;       // the fields of new glyphs: worker threads, the cache on disk
+            struct FieldNeed
+            {
+                std::uint64_t key;
+                Rect ink;
+            };
+            std::vector<FieldNeed> fieldBatch_;                            // FieldSlots: the fields being made, in order
+            std::unordered_set<std::uint64_t, IntHash> fieldBatchKeys_;   // ... their keys
+            std::vector<const GlyphSlot*> fieldSlots_;                     // DrawShapes: each glyph's field
+            std::vector<std::size_t> fieldMissing_;                        // ... the glyphs without one yet
             const std::uint64_t serial_ = NextSerial();   // TileGeneration: this text system's
             RasterParams params_;
             std::uint64_t frame_ = 0;

@@ -119,6 +119,12 @@ if(TARGET esia_text_ft)
     target_compile_definitions(esia_bench PRIVATE ESIA_BENCH_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
     esia_target_defaults(esia_bench)
     add_test(NAME esia_bench_smoke COMMAND esia_bench --backend null --frames 3 --warmup 1 --size 640x400)
+    # text with new glyphs drawn from distance fields (tests/bench/field_bench.cpp): the draw that makes their fields
+    add_executable(esia_field_bench bench/field_bench.cpp)
+    target_link_libraries(esia_field_bench PRIVATE esia::render esia_text_ft esia::freetype esia::backends)
+    target_compile_definitions(esia_field_bench PRIVATE ESIA_BENCH_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+    esia_target_defaults(esia_field_bench)
+    add_test(NAME esia_field_bench_smoke COMMAND esia_field_bench --glyphs 20 --rounds 1 --parts)
 endif()
 
 esia_add_test(esia_shader_tests shaders/test_shader_library.cpp)
