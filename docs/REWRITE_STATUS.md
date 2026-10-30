@@ -50,6 +50,12 @@ in any color; a 16-pixel icon in 7 us.
 at run time, every level with the same bits; long dense series in 0.039 ms of CPU on AVX-512 (plain C++ 0.150, Dear
 ImGui 1.92.9b 0.084).
 
+**Labels at many sub-pixel offsets** (2026-10-30, in Esia): a text drawn at many offsets is placed once per rounding class
+of its glyphs and copied in after that; 3 000 labels 0.421 -> 0.280 ms of CPU on Direct3D 11, the same pixels.
+
+**OpenGL: the host's texture units saved when first bound** (2026-10-30, in Esia): the host's state without a round trip
+to a threaded driver for every unit; a small frame's submit 0.061 -> 0.039 ms.
+
 **Render-class cost, round 2: much content on screen** (2026-10-30, in Esia): plain shapes - a solid fill or stroke
 on a rounded rectangle, a circle, a capsule, a segment - and polylines are 32-byte quads drawn in the draws of the text
 around them, with the pixels they had; shapes and labels overlapping one another are one draw (a thousand overlapping
@@ -147,6 +153,8 @@ on a row index.
 
 * [SVG to textures](#svg-to-textures)
 * [Polylines on the processor's vectors](#polylines-on-the-processors-vectors)
+* [Labels at many sub-pixel offsets](#labels-at-many-sub-pixel-offsets)
+* [OpenGL: the host's texture units saved when first bound](#opengl-the-hosts-texture-units-saved-when-first-bound)
 * [Render-class cost, round 2: much content on screen](#render-class-cost-round-2-much-content-on-screen)
 * [Glass on every shape](#glass-on-every-shape)
 * [Render-class cost, round 1](#render-class-cost-round-1)
@@ -302,6 +310,65 @@ stay as well. A lookup that finds its drawing costs what it did (6.3 to 6.8 ns i
 * A row crossed thousands of times: past 256 cuts it goes in strips of 1/32 pixel (coverage within about 1/64 there).
 * A large drawing is rasterized whole on the thread that draws it, also the parts outside the target (0.4 to 1 ms at
   512 x 512).
+
+## Labels at many sub-pixel offsets
+
+Screens with much content on them draw the same short texts at many places a frame - names, values, units - at
+offsets that are fractions of a pixel. Each such draw placed every glyph again (2026-10-30).
+
+### What changed (`src/esia/text/ft/ft_text_system.cpp`)
+
+* A glyph's quad depends only on the quarter pixel its pen rounds to across and the whole pixel its line rounds to
+  down (a quarter pixel too for an outline in motion). Between the offsets where one of them changes - for a pen, where
+  offset + pen = n + 1/8, 3/8, 5/8, 7/8; for a line, n + 1/2 - the whole placement is the same. `QuadSet` keeps those
+  offsets (`xBreaks`, `yBreaks`) and a placement per class (`classes`, at most 256 a set, texts of up to 64 glyphs): a
+  draw at another offset finds its class with two binary searches and copies the class's quads in, as a text drawn at
+  the same offsets as last time is.
+* `classScore` keeps classes only while a text's offsets come back (+4 a class found, -1 one placed): a text that moves
+  on, or a new text every few frames, is placed as before (one pass straight into the list), and every 16th draw looks
+  again.
+* A moving text (smooth motion) keeps its glyphs' atlas slots per pen and line phase (`movingSlots`), as a still one
+  did per pen phase: no atlas look-up per glyph in motion.
+* A layout's key: its parameters' part kept while they repeat (most texts of a frame share a font, size and wrap
+  width), the text's at a multiply per 8 bytes. A color glyph's color comes from the text's (one conversion, not two).
+* A layout rebuilt for another text now forgets its moving sets too (their placements were the old text's).
+
+### Verified
+
+* The same pixels: rcbench's labels, text and widgets scenes and its scenes of many labels over boxes, drawn by the
+  old and the new build on Direct3D 11, compared texel for texel (no difference); the text and render tests.
+
+### Measured (rcbench, Direct3D 11, RTX 4080 SUPER, medians of 3 alternated runs, CPU = build + submit)
+
+| ms | before | now | Dear ImGui 1.92.9b / 1.93.0 |
+| --- | --- | --- | --- |
+| 3 000 labels at their own offsets, 64 names | 0.421 | 0.280 | 0.252 / 0.256 |
+| 1 000 items with a name and a distance each | 0.419 | 0.391 | 0.407 / 0.489 |
+
+### Not done
+
+* Labels at their own offsets still take 1.1 times Dear ImGui's CPU (0.92 on whole pixels).
+
+## OpenGL: the host's texture units saved when first bound
+
+### What changed (`src/esia/rhi/opengl/gl_device.cpp`)
+
+Saving the host's state at BeginFrame asked every texture unit for its texture and sampler: an ActiveTexture before
+each query, and on a threaded driver (NVIDIA's) a query after any call waits for the driver's thread. That was 80 % of a
+small frame's submit time (`SaveHostState` under `BeginFrame` in the profile). The other queries now come with no call
+between them (one wait), a unit's bindings are saved the first time the device binds a texture or a sampler to it
+(`SaveUnit`), and only those units are put back (`HostState::savedUnits`).
+
+### Verified
+
+* `GlDevice.HostStateIsRestored` puts a texture of the host's on 16 units and samplers on some, and checks every one
+  after a frame and after the calls outside frames; the OpenGL and GLES tests and conformance.
+
+### Measured
+
+* 100 items with a name and a distance (an rcbench scene), OpenGL on the RTX 4080 SUPER: submit p50 0.061 -> 0.039 ms
+  (the profile's share of `SaveHostState` 80 -> 59 %: what is left is the first query's wait, which Dear ImGui's backend
+  has too).
 
 ## Polylines on the processor's vectors
 
