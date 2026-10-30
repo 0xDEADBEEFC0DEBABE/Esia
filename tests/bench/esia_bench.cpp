@@ -2,7 +2,7 @@
 // to submit (Renderer::Render: plan, upload, commands), and what it costs the GPU where the device has timestamps.
 //
 //   esia_bench [--backend d3d11] [--scene all|text|widgets|widgets-flat|shapes|glass|...] [--frames 600] [--warmup 60]
-//              [--size 1600x1000] [--hdr] [--light]
+//              [--size 1600x1000] [--hdr] [--light] [--in-flight]
 //
 // The glass scenes: as they are, with RenderParams::targetStatic (unchanged captures reused), with a background that
 // scrolls under the glass ("live"), and that with captures reused for two frames (RenderParams::backdropReuseFrames);
@@ -16,6 +16,12 @@
 // time of the backdrop captures (copy and pyramid) and of the FX batches with glass (every category switch timed:
 // RenderParams::maxProfileScopes 1024), the draw calls and what a frame uploads. Compare two builds by alternating
 // their runs on the same machine, not by absolute numbers.
+//
+// --in-flight: the GPU is not waited for - the device keeps the frames in flight it keeps for an application (Vulkan
+// and Direct3D 12: a fence per frame slot, waited for when the slot comes back), as a window's frame loop with vsync
+// off runs. The frame time is then the period from one frame's start to the next: the GPU's time per frame where the
+// GPU is the bottleneck, the CPU's where it is. Submit includes the device's waits for its slots then, and the GPU
+// time of a frame runs from the end of the frame before (its first timestamp waits for that) to its own end.
 #include "esia/core/texture.hpp"
 #include "esia/render/painter.hpp"
 #include "esia/render/renderer.hpp"
@@ -184,8 +190,9 @@ int main(int argc, char** argv)
 {
     std::string backend = DefaultBackend(), scene = "all", fonts = ESIA_BENCH_FONT_DIR;
     int frames = 600, warmup = 60, width = 1600, height = 1000;
-    bool hdr = false;     // an RGBA16_FLOAT target, the frame encoded as scRGB (RenderParams::hdr)
-    bool light = false;   // one UI light over the middle of the target (RenderParams::light)
+    bool hdr = false;        // an RGBA16_FLOAT target, the frame encoded as scRGB (RenderParams::hdr)
+    bool light = false;      // one UI light over the middle of the target (RenderParams::light)
+    bool inFlight = false;   // the GPU not waited for between frames
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
@@ -206,10 +213,12 @@ int main(int argc, char** argv)
             hdr = true;
         else if (a == "--light")
             light = true;
+        else if (a == "--in-flight")
+            inFlight = true;
         else
         {
             std::fprintf(stderr, "usage: esia_bench [--backend name] [--scene all|text|widgets|widgets-flat|shapes|glass|...] [--frames n] "
-                                 "[--warmup n] [--size WxH] [--fonts dir] [--hdr] [--light]\n");
+                                 "[--warmup n] [--size WxH] [--fonts dir] [--hdr] [--light] [--in-flight]\n");
             return 2;
         }
     }
@@ -263,10 +272,15 @@ int main(int argc, char** argv)
     b.height = (float)height;
 
     const bool readback = hdev.device->GetCaps().readback;
+    const bool waited = readback && !inFlight;   // the GPU finishes every frame before the next one starts
     std::printf("esia_bench: %s on %s, %d x %d, %d frames after %d of warm-up%s%s\n", backend.c_str(), hdev.adapter.empty() ? "?" : hdev.adapter.c_str(),
-                width, height, frames, warmup, light ? ", a UI light" : "", readback ? "" : " (no readback: the GPU is not waited for)");
-    std::printf("%-13s %-17s %-17s %-17s %7s %7s %6s %9s %9s %7s %7s %10s %9s\n", "scene", "build ms (p50/99)", "submit ms", "gpu ms", "capture", "glass",
-                "draws", "vertices", "indices", "quads", "fx", "upload KB", "captures");
+                width, height, frames, warmup, light ? ", a UI light" : "",
+                inFlight ? " (frames in flight: the GPU is not waited for)" : readback ? "" : " (no readback: the GPU is not waited for)");
+    std::printf("%-13s ", "scene");
+    if (inFlight)
+        std::printf("%-17s ", "frame ms (p50/99)");
+    std::printf("%-17s %-17s %-17s %7s %7s %6s %9s %9s %7s %7s %10s %9s\n", inFlight ? "build ms" : "build ms (p50/99)", "submit ms", "gpu ms",
+                "capture", "glass", "draws", "vertices", "indices", "quads", "fx", "upload KB", "captures");
     for (const SceneDef& sd : kScenes)
     {
         if (scene != "all" && scene != sd.name)
@@ -287,10 +301,11 @@ int main(int argc, char** argv)
             params.light = render::UiLight::Point(Vec2(b.width * 0.5f, b.height * 0.5f), 240.0f);
         int captures = 0, reused = 0, restored = 0;
         DrawList dl;
-        Series build, submit, gpu, gpuCapture, gpuGlass;
+        Series build, submit, gpu, gpuCapture, gpuGlass, period;
         std::uint64_t lastGpuFrame = 0;
         std::vector<std::uint8_t> pixel;
         render::RenderStats last;
+        Clock::time_point previous;   // the start of the frame before
         for (int f = 0; f < warmup + frames; ++f)
         {
             const double t = (double)f / 60.0;
@@ -314,9 +329,12 @@ int main(int argc, char** argv)
                 return 1;
             }
             const Clock::time_point t2 = Clock::now();
-            if (readback)
+            if (waited)
                 hdev.device->ReadPixels(hdev.target, rhi::IRect{0, 0, 1, 1}, pixel);   // the GPU finishes the frame
             last = renderer.Stats();
+            if (f > warmup)
+                period.v.push_back(Ms(previous, t0));
+            previous = t0;
             if (f < warmup)
                 continue;
             build.v.push_back(Ms(t0, t1));
@@ -332,13 +350,15 @@ int main(int argc, char** argv)
                 lastGpuFrame = last.gpu.frame;
             }
         }
-        char cols[5][32];
-        Series* parts[5] = {&build, &submit, &gpu, &gpuCapture, &gpuGlass};
-        for (int i = 0; i < 5; ++i)
+        if (inFlight && readback)
+            hdev.device->ReadPixels(hdev.target, rhi::IRect{0, 0, 1, 1}, pixel);   // the next scene starts on an idle GPU
+        char cols[6][32];
+        Series* parts[6] = {&build, &submit, &gpu, &gpuCapture, &gpuGlass, &period};
+        for (int i = 0; i < 6; ++i)
         {
             if (parts[i]->v.empty())
                 std::snprintf(cols[i], sizeof(cols[i]), "-");
-            else if (i < 3)
+            else if (i < 3 || i == 5)   // (the frame period too)
                 std::snprintf(cols[i], sizeof(cols[i]), "%.3f / %.3f", parts[i]->At(0.5), parts[i]->At(0.99));
             else
                 std::snprintf(cols[i], sizeof(cols[i]), "%.3f", parts[i]->At(0.5));
@@ -349,8 +369,11 @@ int main(int argc, char** argv)
         char caps[48];   // per frame: taken + reused (of them restored from their copy aside)
         std::snprintf(caps, sizeof(caps), "%.1f+%.1f(%.1f)", (double)captures / (double)frames, (double)reused / (double)frames,
                       (double)restored / (double)frames);
-        std::printf("%-13s %-17s %-17s %-17s %7s %7s %6d %9d %9d %7d %7d %10.1f %9s\n", sd.name, cols[0], cols[1], cols[2], cols[3], cols[4],
-                    last.drawCalls, last.vertices, last.indices, last.quads, last.fxInstances, kb, caps);
+        std::printf("%-13s ", sd.name);
+        if (inFlight)
+            std::printf("%-17s ", cols[5]);
+        std::printf("%-17s %-17s %-17s %7s %7s %6d %9d %9d %7d %7d %10.1f %9s\n", cols[0], cols[1], cols[2], cols[3], cols[4], last.drawCalls,
+                    last.vertices, last.indices, last.quads, last.fxInstances, kb, caps);
     }
     return 0;
 }

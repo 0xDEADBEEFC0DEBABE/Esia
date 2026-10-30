@@ -47,6 +47,12 @@ for it with or without it), a panel's backdrop capture 9 to 11 us, mostly its pa
 8 % faster on Direct3D 11 / 12, Vulkan and OpenGL with the same pixels: the light's direction and the rim's light computed
 only where they are used, the bevel's normal from one corner.
 
+**Vulkan frames in flight** (2026-10-30, in Esia): a frame's vertices, indices, instances and constants in rings per
+frame in flight, in device memory the host maps where there is some (written in place; else copied from staging,
+constants in host memory); upload barriers on what was written instead of one that waited for all earlier work;
+`esia_bench --in-flight` measures frames the GPU is not waited for. RTX 4080 SUPER: GPU -22 % for glass (its
+constants no longer read across PCIe), -46 % for 10 000 shapes, -50 % for a page of text; submit up to -12 %.
+
 **SVG to textures** (2026-10-30, in Esia): SVG files parsed once and rasterized at the size drawn into texture pages, with
 exact area coverage (overlaps, both fill rules and a stroke's pieces resolved in the sweep); monochrome icons as one mask
 in any color; a 16-pixel icon in 7 us. Later that day: icons that last drawn from the text's pages in the labels' draw,
@@ -161,6 +167,7 @@ window, the wheel changing areas halfway, a field pushing the button after it ou
 on a row index.
 
 * [Glass shading cost](#glass-shading-cost)
+* [Vulkan frames in flight](#vulkan-frames-in-flight)
 * [SVG to textures](#svg-to-textures)
 * [Polylines on the processor's vectors](#polylines-on-the-processors-vectors)
 * [Labels at many sub-pixel offsets](#labels-at-many-sub-pixel-offsets)
@@ -288,6 +295,116 @@ computes.
   goldens.
 * An integrated GPU: the Ryzen's is off in the BIOS. Its arithmetic is scarcer: what was cut here should weigh more
   there.
+
+## Vulkan frames in flight
+
+Rounds 1 and 2 left two things in Vulkan's uploads that make frames in flight wait for each other (2026-10-30): one
+barrier before a frame's uploads waited for all earlier work at every stage - the frame before's too -, and every
+buffer had one device copy, which each frame wrote while the frame before could still be reading it. No benchmark ran
+frames in flight to see what that cost. Measuring it found a larger cost next to it: the GPU read every draw's
+constants from host memory.
+
+### What changed
+
+* The frame's data in a ring per frame in flight: `MapBuffer` in a frame (the renderer's vertices, indices, FX instances
+  and quads) hands out a range of the frame slot's new ring (vertex, index and storage usage; 1 MiB chunks that grow and
+  merge like the staging ring's). Where the device has device memory the host maps (`DEVICE_LOCAL | HOST_VISIBLE |
+  HOST_COHERENT`: the BAR of a discrete GPU - 256 MB without resizable BAR -, unified memory) the ring is there and the
+  bytes are written in place: no copy, no barrier, read by the GPU at full speed. Without it (or without room in it) the
+  ring is device memory, and the bytes go into the slot's staging ring - written once, not into a vector first - and are
+  copied into the range at `UnmapBuffer`. The frame's draws read the range: vertex and index buffer offsets, the FX
+  storage buffer's descriptor range. A slot's rings are reset only when the slot comes back - its last frame completed
+  (its fence, or the host's promise) -, so nothing waits for the frame before and every frame in flight reads data of
+  its own. Host frames that share a slot (`FrameDesc::hostFrame`) take ranges one after another.
+* Constants: the uniform ring (one per slot already) in mapped device memory too where there is some, else in host
+  memory as before. Read across PCIe, every draw's constants cost a glass frame a fifth of its GPU time on the RTX 4080
+  SUPER.
+* `vulkan::Desc::mappedDeviceMemory` (default on; `HeadlessOptions::mappedDeviceMemory`; the registered creator reads
+  `ESIA_VULKAN_MAPPED_DEVICE_MEMORY=0`): off leaves that memory to the host - constants in host memory, the frame's data
+  copied from staging. A few MB per frame in flight; an allocation that fails falls back chunk by chunk.
+* A buffer's own copy keeps `UpdateBuffer`'s bytes (and `MapBuffer`'s outside a frame, recorded by the next one, as
+  before) and is made at its first use: the buffers the renderer maps every frame take no device memory beside the
+  ring.
+* Barriers on what was written. No barrier opens a block of uploads (it was `ALL_COMMANDS` -> `TRANSFER`). An image
+  upload waits through its transition from the layout it is in, as before, and an image written twice in a block waits
+  on that image, not on every transfer; an `UpdateBuffer` into a copy that commands used waits on that buffer, for the
+  stages that read its kind and for transfers. The block ends with the written buffer ranges made visible to the access
+  and stages that read each kind (vertex attributes or indices at vertex input, shader reads of the FX buffer) and the
+  uploaded images' transitions: no global memory barrier, no uniform or transfer reads of buffers nothing reads so.
+* `esia_bench --in-flight`: the GPU is not waited for between frames, so the device keeps its frames in flight (Vulkan's
+  headless device: 2, a fence per slot), as a window's loop with vsync off. Frame time is the period from a frame's
+  start to the next one's - the GPU's time per frame where the GPU is the bottleneck, the CPU's where it is; submit
+  includes the waits for a slot then, and a frame's GPU time runs from the end of the frame before. CTest runs the mode
+  on the null device (`esia_bench_smoke_in_flight`).
+* Tests (`esia_rhi_vulkan_tests`), each with mapped device memory and through staging:
+  `Vulkan.BufferWritesWithFramesInFlight` writes vertex, index and FX buffers with `UpdateBuffer` and with `MapBuffer`,
+  mixed from frame to frame and once outside a frame, while the frames that draw from them are in flight;
+  synchronization validation checks every hazard (through staging, without the own copy's barrier, without its reader
+  stages, or with one ring for every slot it reports one). `VulkanScenes.FrameDataPerFrame` renders five frames of
+  different content, a target each, the GPU never waited for: every target has its frame's pixels rendered alone, and
+  the two ways give the same pixels.
+
+### Verified
+
+* Every test on Windows (clang-cl Debug, `-DESIA_WERROR=ON`): 43 / 43, `esia_rhi_vulkan_tests` 17 / 17 and the four
+  Vulkan conformance tests (`--strict`, dynamic rendering and render passes, one frame and three) with the validation
+  layer and synchronization validation: no message. MSVC `/W4 /WX` and the GNU flags on the changed sources.
+* Pixels: `esia_conformance --backend vulkan --out` of the build before and after (Release, RTX 4080 SUPER), dynamic
+  rendering and render passes, one frame and three, with mapped device memory and through staging: 35 / 35 images
+  identical bit for bit each time; the goldens are unchanged.
+* `esia_bench --in-flight` with the validation layer and synchronization validation on (`ESIA_VULKAN_VALIDATION=1`),
+  both ways: every scene, no message. `glass_window --api vulkan --debug` (a swap chain, the host's command buffers, two
+  frames in flight): 600 frames, no message.
+
+### Measured
+
+`esia_bench`, Release clang-cl, Vulkan on the RTX 4080 SUPER, 1600 x 1000, 600 frames after 60 of warm-up; the build
+before (9df4411 with this `esia_bench`) and after, alternated, 12 runs each in flight and 10 with the GPU waited for (a
+run during which another benchmark ran on the machine done again); ms, medians of the runs' medians, before -> after
+(after, through staging: `ESIA_VULKAN_MAPPED_DEVICE_MEMORY=0`):
+
+| scene | frame, in flight | GPU, in flight | GPU, waited for | submit, waited for |
+| --- | --- | --- | --- | --- |
+| text | 0.036 -> 0.033 (0.035) | 0.014 -> 0.007 (0.014) | 0.016 -> 0.009 (0.016) | 0.036 -> 0.035 (0.034) |
+| widgets | 0.051 -> 0.050 (0.050) | 0.025 -> 0.019 (0.025) | 0.026 -> 0.020 (0.026) | 0.036 -> 0.034 (0.033) |
+| widgets-flat | 0.100 -> 0.099 (0.098) | 0.025 -> 0.018 (0.025) | 0.026 -> 0.019 (0.026) | 0.039 -> 0.035 (0.035) |
+| shapes (10 000, 625 KB a frame) | 0.450 -> 0.444 (0.437) | 0.056 -> 0.030 (0.056) | 0.057 -> 0.031 (0.057) | 0.069 -> 0.061 (0.055) |
+| glass | 0.530 -> 0.412 (0.527) | 0.512 -> 0.398 (0.513) | 0.514 -> 0.403 (0.515) | 0.207 -> 0.207 (0.204) |
+| glass-static | 0.435 -> 0.407 (0.428) | 0.417 -> 0.394 (0.416) | 0.429 -> 0.402 (0.426) | 0.202 -> 0.202 (0.201) |
+| glass-live | 0.536 -> 0.413 (0.530) | 0.512 -> 0.399 (0.514) | 0.538 -> 0.420 (0.540) | 0.251 -> 0.253 (0.246) |
+| glass-live-2 | 0.597 -> 0.540 (0.589) | 0.427 -> 0.396 (0.434) | 0.458 -> 0.405 (0.434) | 0.201 -> 0.200 (0.198) |
+
+* The GPU: a glass frame loses a fifth of its time (0.512 -> 0.398 ms in flight; the runs 0.507 - 0.730 -> 0.397 -
+  0.400): its 121 draws read their constants from device memory instead of across PCIe. Frames that upload much lose
+  the copy: the shapes 0.056 -> 0.030 ms, a page of text 0.014 -> 0.007. The glass scenes are bound by the GPU in
+  flight, so their frame follows: 0.530 -> 0.412 ms.
+* The CPU: submit with the GPU waited for 0.069 -> 0.061 ms for the shapes (runs 0.065 - 0.096 -> 0.059 - 0.063),
+  4 - 10 % less for text and widgets, the glass scenes the same (constants written into device memory cost the CPU
+  nothing measurable). In flight the text and widget scenes are bound by the CPU: text 0.036 -> 0.033 ms a frame.
+  Through staging the shapes submit less still (0.055 ms), their 625 KB written into host memory rather than across
+  PCIe, but the GPU copies them.
+* Found on the way: the first version of this change wrote the frame's data through staging only, and the frames' GPU
+  time stayed where it was - for the glass scenes in flight 3 to 4 us more (0.508 -> 0.512 ms, 12 runs, ranges
+  0.502 - 0.516 -> 0.509 - 0.518). With the old barrier before the uploads put back (an experiment) it was 0.509: on
+  this GPU the next frame's copy overlapping the frame before cost more than the overlap saved. The upload barrier was
+  not what ordered the frames on the GPU; their target is (Not done). Written in place, nothing is copied.
+
+### Not done
+
+* Frames still meet at the images they share. A frame's first pass on its target waits for every earlier use of the
+  stages the target's resting layout stands for, the frame before's included: vertex and fragment shaders for
+  `SHADER_READ_ONLY`, where a sampleable target rests after each pass (a sampleable swap-chain image too, moved there at
+  `BeginFrame`), color output for the others - only an image entered as `UNDEFINED` and not sampleable waits for
+  nothing. And captures write the backdrop copy and the pyramid that the frame before's glass reads. A Vulkan barrier
+  cannot wait for one image's last use: an image whose last use lies in a completed frame (or a swap-chain image entered
+  as `UNDEFINED` and not read yet) could transition without waiting, and the frames would overlap there. The benchmark
+  renders into one target, where they meet in any case.
+* Textures (glyph pages, images) and `UpdateBuffer` still go through staging and a copy, also where device memory is
+  mapped (`src/esia/rhi/vulkan/STATUS.md`, known issue 2); an `UpdateBuffer` into a buffer that frames in flight draw
+  from waits for its kind's reading stages (the renderer maps its per-frame data; `UpdateBuffer` is for data that
+  stays).
+* The mapped device memory is not budgeted (`VK_EXT_memory_budget`): next to a host that fills the BAR the backend falls
+  back when an allocation fails, not before.
 
 ## SVG to textures
 
@@ -727,7 +844,8 @@ before.
   a plain rectangle among them take a draw more; scenes of text and plain shapes take fewer.
 * Arcs and rings, per-corner radii, fading strokes and every other material stay FX instances; so do polylines with a
   material (FX paths) and, as geometry, the ones above.
-* Vulkan: the uploads' barrier waits for all earlier work and every buffer has one device copy (round 1's).
+* Vulkan: the uploads' barrier waits for all earlier work and every buffer has one device copy (round 1's). Done in
+  [Vulkan frames in flight](#vulkan-frames-in-flight).
 
 ## Glass on every shape
 
@@ -849,7 +967,8 @@ findings (`64c1753`), each checked against the code.
   every glyph is put on the pixel grid at a quarter-pixel phase, which Dear ImGui does not do. Round 2: such labels
   drawn on whole pixels (`TextFlags_PixelSnap`) build in 0.82 times its time.
 * Vulkan: the uploads' barrier waits for all earlier work and every buffer has one device copy (frames in flight
-  serialize); to be measured with frames in flight, which the benchmarks do not run.
+  serialize); to be measured with frames in flight, which the benchmarks do not run. Done in
+  [Vulkan frames in flight](#vulkan-frames-in-flight), measured with `esia_bench --in-flight`.
 
 ## HDR output
 
