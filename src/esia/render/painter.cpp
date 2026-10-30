@@ -118,7 +118,8 @@ namespace esia
             }
         }
 
-        thread_local std::vector<Vec2> tPath;
+        thread_local std::vector<Vec2> tPath, tStrokesPath;
+        thread_local std::vector<int> tStrokeStarts;
 
         // Polyline's cross-section at `pixelScale`: half its width, its inside and its edge (a pixel of antialiasing
         // between them), the sides of its round ends; a line thinner than a pixel is a pixel wide and fainter (`fade`)
@@ -659,6 +660,67 @@ namespace esia
         EmitPath(pts, n, false, inset, depth, s);
     }
 
+    void Painter::Polylines(const Vec2* points, const int* strokeStart, int strokes, float thickness, const Style& s, std::uint32_t flags)
+    {
+        if (!points || !strokeStart || strokes <= 0 || thickness <= 0.0f)
+            return;
+        const auto each = [&] {
+            for (int k = 0; k < strokes; ++k)
+            {
+                const int a = strokeStart[k], n = strokeStart[k + 1] - a;
+                if (n == 1)
+                    Circle(points[a], thickness * 0.5f, s);   // a dot
+                else if (n >= 2)
+                    Polyline(points + a, n, thickness, s, flags);
+            }
+        };
+        if (!FxOnly(s))
+        {
+            each();
+            return;
+        }
+        // every stroke's path as Polyline builds it, each from a quarter of a data instance of its own: the stroke before
+        // ends in its last point repeated up to it (edges of no length), its first edge comes from its own first point
+        constexpr std::size_t kQuarter = fx::kPathPointsPerData / 4;
+        std::vector<Vec2>& all = tStrokesPath;
+        std::vector<int>& starts = tStrokeStarts;
+        all.clear();
+        starts.clear();
+        for (int k = 0; k < strokes; ++k)
+        {
+            const int a = strokeStart[k], n = strokeStart[k + 1] - a;
+            if (n <= 0)
+                continue;
+            if (n == 1)
+                tPath.assign(2, points[a]);   // a dot: a stroke of no length, round
+            else
+                BuildPath(points + a, n, flags, Pixel(), tPath);
+            if (tPath.empty())
+                continue;
+            while (all.size() % kQuarter != 0)
+                all.push_back(all.back());
+            starts.push_back((int)all.size());
+            all.insert(all.end(), tPath.begin(), tPath.end());
+        }
+        if (all.size() > fx::kPathMaxPoints)
+        {
+            each();
+            return;
+        }
+        if (all.size() < 2)
+            return;
+        // a material only an FX shape has: its color the polyline's (the fill, else the stroke's color, else white -
+        // glass alone stays clear), as Polyline's
+        Style line = s;
+        if (!line.hasFill && !line.hasGlass)
+        {
+            line.Fill(s.strokeColor.a > 0.0f ? s.strokeColor : Color::White());
+            line.strokeWidth = 0.0f;
+        }
+        const float h = thickness * 0.5f;
+        EmitPath(all.data(), (int)all.size(), true, h, h, line, &starts);
+    }
+
     void Painter::EmitPolyline(const Vec2* points, int count, float thickness, const Style& s)
     {
         if (!points || count < 2 || thickness <= 0.0f)
@@ -668,7 +730,7 @@ namespace esia
         EmitPath(points, count, true, h, h, s);
     }
 
-    void Painter::EmitPath(const Vec2* points, int count, bool open, float lessen, float depth, const Style& s)
+    void Painter::EmitPath(const Vec2* points, int count, bool open, float lessen, float depth, const Style& s, const std::vector<int>* strokes)
     {
         const int n = std::min(count, (int)fx::kPathMaxPoints);
         if (n < (open ? 2 : 3))
@@ -740,8 +802,10 @@ namespace esia
             for (int q = 0; q * kQuarter < m; ++q)
             {
                 const int i0 = first + q * kQuarter, i1 = std::min(first + m, i0 + kQuarter);
-                // the point before the quarter; the path's first edge comes from its first point (open) or its last one
-                const Vec2 before = placed[i0 > 0 ? (std::size_t)i0 - 1 : open ? 0 : (std::size_t)n - 1];
+                // the point before the quarter; the path's first edge comes from its first point (open) or its last one,
+                // a stroke of its own from its own first point (Polylines: no edge into it)
+                const bool own = strokes && std::binary_search(strokes->begin(), strokes->end(), i0);
+                const Vec2 before = placed[own ? (std::size_t)i0 : i0 > 0 ? (std::size_t)i0 - 1 : open ? 0 : (std::size_t)n - 1];
                 esia::Rect box(before, before);
                 for (int i = i0; i < i1; ++i)
                     box = box.Union(esia::Rect(placed[(std::size_t)i], placed[(std::size_t)i]));

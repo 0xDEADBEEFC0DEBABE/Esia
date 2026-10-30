@@ -827,6 +827,40 @@ ESIA_TEST(Painter, PathDataBoundsItsQuarters)
     ESIA_CHECK(in.size() == 9 && QuartersBounded(dl, 7));
 }
 
+// Several strokes as one shape (Polylines): one FX path, each stroke from a quarter of a data instance of its own -
+// the stroke before ends in its last point repeated up to it, the quarter's point before is its own first point (no
+// edge into it). Plain colors: a polyline each.
+ESIA_TEST(Painter, PolylinesAreOneShape)
+{
+    DrawList dl = MakeList();
+    Painter p(dl, Fx());
+    // a t: its stem with a turn at its foot, its cross-bar; a dot
+    const Vec2 pts[] = {Vec2(20, 10), Vec2(20, 60), Vec2(30, 70), Vec2(8, 30), Vec2(34, 30), Vec2(50, 12)};
+    const int starts[] = {0, 3, 5, 6};
+    p.Polylines(pts, starts, 3, 4.0f, Style().Glass(GlassMaterial()).Shadow(Color::Black(0.3f), 6, Vec2(0, 2)));
+    const auto& in = dl.FxInstances();
+    ESIA_CHECK(in.size() == 2 && (in[0].flags[0] & fx::kPath) && in[0].radii[3] == 1.0f && in[0].radii[0] == 2.0f);
+    const std::vector<Vec2> path = PathPoints(dl, 0);
+    ESIA_CHECK(path.size() == 18);   // 3 + 5 repeats, 2 + 6 repeats, the dot's 2
+    ESIA_CHECK(path[0] == pts[0] && path[2] == pts[2] && path[7] == pts[2] && path[8] == pts[3] && path[9] == pts[4] && path[15] == pts[4] &&
+               path[16] == pts[5] && path[17] == pts[5]);
+    float rows[(fx::kPathBeforeRow + 2) * 4];
+    std::memcpy(rows, &in[1], sizeof(rows));
+    const float* before = rows + fx::kPathBeforeRow * 4;   // quarters 0 .. 3: two to a row
+    ESIA_CHECK(before[0] == pts[0].x && before[1] == pts[0].y);   // the path's first: its first point
+    ESIA_CHECK(before[2] == pts[3].x && before[3] == pts[3].y);   // the bar's: its own first point
+    ESIA_CHECK(before[4] == pts[5].x && before[5] == pts[5].y);   // the dot's
+    const float* bar = rows + (fx::kPathQuarterRow + 1) * 4;    // the bar's quarter bounds the bar alone
+    ESIA_CHECK(bar[0] == 8.0f && bar[1] == 30.0f && bar[2] == 34.0f && bar[3] == 30.0f);
+    // one stroke: Polyline's path; plain colors: a polyline each (and a circle for a dot), no path
+    p.Polylines(pts, starts, 1, 4.0f, Style().Glass(GlassMaterial()));
+    ESIA_CHECK(in.size() == 4 && PathPoints(dl, 2).size() == 3);
+    const std::size_t drawn = dl.Vertices().size() + dl.Quads().size() + in.size();
+    p.Polylines(pts, starts, 3, 4.0f, Style().Fill(Color::White()));
+    const auto paths = std::count_if(in.begin(), in.end(), [](const fx::Instance& i) { return (i.flags[0] & fx::kPath) != 0; });
+    ESIA_CHECK(paths == 2 && dl.Vertices().size() + dl.Quads().size() + in.size() > drawn);
+}
+
 // Rounded corners: the outline is inset by the radius and the shader takes the radius off its distance again - convex
 // corners become exact arcs, the bounds stay the polygon's. A concave corner gets a fillet of points; a corner takes
 // its radius as far as its edges allow.

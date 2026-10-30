@@ -281,6 +281,13 @@ namespace esia
         // all of them. Quads drawn with the text, the same pixels (PainterEnv::quadShapes), unless a turn is sharper
         // than 120 degrees or a segment too short for the turns at its ends, under a scale or a mask.
         void Polyline(const Vec2* points, int count, float thickness, const Style& s, std::uint32_t flags = PolylineFlags_None);
+        // Several open strokes as one shape, each `thickness` wide (stroke k: points strokeStart[k] .. strokeStart[k + 1] -
+        // 1; one point: a dot): where they cross or touch they are one surface - one glass, one shadow, one glow - where
+        // shapes drawn one after another would lie over each other (a handwriting's crossed t, its letters' loops over
+        // other strokes). With a material only an FX shape has, one FX path of them all (fx::kPathQuarterRow: each stroke
+        // from a quarter of its own); else, and past fx::kPathMaxPoints in all, Polyline each.
+        void Polylines(const Vec2* points, const int* strokeStart, int strokes, float thickness, const Style& s,
+                       std::uint32_t flags = PolylineFlags_None);
         // A solid polyline: Polyline(points, count, thickness, Style().Fill(color), flags) without building a Style - its
         // quads from the points themselves where they need no smoothing and repeat none.
         void Polyline(const Vec2* points, int count, float thickness, Color color, std::uint32_t flags = PolylineFlags_None);
@@ -340,8 +347,10 @@ namespace esia
         void EmitPolygon(const Vec2* points, int count, const float* radii, float radius, const Style& s);
         void EmitPolyline(const Vec2* points, int count, float thickness, const Style& s);
         // the path instance and its points, under the scale stack: `lessen` (rounding / half thickness) and `depth`
-        // (how deep the shape goes: glass's bevel reaches no deeper) at rest
-        void EmitPath(const Vec2* points, int count, bool open, float lessen, float depth, const Style& s);
+        // (how deep the shape goes: glass's bevel reaches no deeper) at rest; `strokes` (open, sorted, each on a quarter
+        // of a data instance): the points where a stroke of its own starts - no edge into them
+        void EmitPath(const Vec2* points, int count, bool open, float lessen, float depth, const Style& s,
+                      const std::vector<int>* strokes = nullptr);
         // glow containment, culling and the emit, shared by every shape (false: culled)
         bool Submit(fx::Instance& inst, const Style& s, const esia::Rect& restShape, float restGlow);
         // The material rows of `inst` from `s` (paint, stroke, shadow, glow, glass, noise, shimmer, opacity, custom

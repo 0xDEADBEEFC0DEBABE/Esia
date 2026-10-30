@@ -544,6 +544,18 @@ void PathNearestOpen(float2 p, FxInst I, inout float best, inout float2 bestV)
 }
 #endif
 
+#ifdef ESIA_SM3
+// SM3 takes every edge in turn: a quarter of a data instance whose point before is its own first point starts a stroke
+// of its own (Painter::Polylines) - no edge into it. `r` a quarter's first row (fx::kPathBeforeRow: rows 21 and 22).
+float2 PathBeforeOf(uint index, float r)
+{
+    const float block = floor(r / 16.0);
+    const float q = floor((r - block * 16.0) * 0.25);
+    const float4 pair = FxFetch(index + 1u + (uint)block, (uint)(21.0 + floor(q * 0.5)));
+    return q - 2.0 * floor(q * 0.5) > 0.5 ? pair.zw : pair.xy;
+}
+#endif
+
 // The exact distance to a path, negative inside a closed one, less radii.x (its rounding, or half a polyline's
 // thickness); `grad` its gradient (the outward normal on the outline). Loops of at most 128 rows inside one of at most
 // 16 blocks (fx::kPathMaxPoints): SM3 runs a loop 255 times at most. An open path past SM3: SdPathOpen.
@@ -578,6 +590,14 @@ float SdPath(float2 p, FxInst I, out float2 grad)
                 if (r >= rows)
                     break;
                 const float4 row = PathRow(I.index, r);
+#ifdef ESIA_SM3
+                [branch] if (r - 4.0 * floor(r * 0.25) < 0.5)
+                {
+                    const float2 before = PathBeforeOf(I.index, r);
+                    if (before.x == row.x && before.y == row.y)
+                        prev = row.xy;
+                }
+#endif
                 PathEdge(p, row.xy, prev, best, bestV, side);
                 prev = row.xy;
                 if (2.0 * r + 1.0 < n)
@@ -596,6 +616,13 @@ float SdPath(float2 p, FxInst I, out float2 grad)
     return side * d - I.radii.x;
 }
 
+#ifdef ESIA_SM3
+// SM3's full shader has no room for a third copy of a path's loop: the gradient the coverage measured at the pixel's
+// own place (FxPS's first ShapeSD) serves the glass's normal there (ShapeNormal) - the same numbers
+static float2 gPathGrad = float2(0.0, -1.0);
+static bool gPathGradKept = false;
+#endif
+
 float ShapeSD(float2 p, FxInst I)
 {
     uint kind = I.flags.z;
@@ -610,6 +637,13 @@ float ShapeSD(float2 p, FxInst I)
     {
         float2 g;
         d = SdPath(p, I, g);
+#ifdef ESIA_SM3
+        if (!gPathGradKept)
+        {
+            gPathGrad = g;
+            gPathGradKept = true;
+        }
+#endif
     }
     else if (kind == SHAPE_ARC)
     {
@@ -638,9 +672,13 @@ float2 ShapeNormal(float2 p, FxInst I)
     // a path knows its gradient: the direction from its nearest point (one pass over the points, not four)
     [branch] if (FX_HAS(I.flags.x, F_PATH))
     {
+#ifdef ESIA_SM3
+        return gPathGrad;
+#else
         float2 g;
         SdPath(p, I, g);
         return g;
+#endif
     }
     const float e = 0.5;
     float2 g;

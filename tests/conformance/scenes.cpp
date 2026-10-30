@@ -377,6 +377,74 @@ namespace esia::conformance
             p.Polyline(pts.data(), (int)pts.size(), 5.0f, Style().Glass(Glass(1, 8, 2.5f)).Shadow(Color::Black(0.3f), 8, Vec2(0, 4)));
         }
 
+        // Strokes crossing as one shape (Painter::Polylines): a t, an x, a loop through a line, three strokes through one
+        // point, a dot beside a line, a lattice of short strokes over many data instances - in glass with a shadow, with a
+        // glow, filled with a shadow: one surface where they cross, no edge from a stroke to the next
+        void PathStrokes(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl, Env());
+            Wallpaper(p, dl, Rect(0, 0, 320, 240));
+            std::vector<Vec2> pts;
+            std::vector<int> starts;
+            const auto stroke = [&](std::initializer_list<Vec2> s) {
+                starts.push_back((int)pts.size());
+                pts.insert(pts.end(), s.begin(), s.end());
+            };
+            const auto draw = [&](float width, const Style& s) {
+                starts.push_back((int)pts.size());
+                p.Polylines(pts.data(), starts.data(), (int)starts.size() - 1, width, s);
+                pts.clear();
+                starts.clear();
+            };
+            GlassMaterial tube = Glass(0.5f, 14.0f, 3.0f);
+            tube.dispersion = 0.8f;
+            tube.tint = Color(1, 1, 1, 0.16f);
+            const Style glass = Style().Glass(tube).Shadow(Color::Black(0.35f), 8, Vec2(0, 4));
+            // a t: a stem with a turn at its foot, its cross-bar
+            stroke({Vec2(40, 14), Vec2(37, 50), Vec2(36, 70), Vec2(44, 78), Vec2(56, 72)});
+            stroke({Vec2(22, 38), Vec2(40, 36.5f), Vec2(58, 38)});
+            draw(7.0f, glass);
+            // an x
+            stroke({Vec2(76, 22), Vec2(96, 46), Vec2(118, 76)});
+            stroke({Vec2(118.5f, 21.5f), Vec2(97, 48), Vec2(74.25f, 77)});
+            draw(7.0f, glass);
+            // a loop through a line, and a dot beside it
+            for (int i = 0; i <= 40; ++i)
+            {
+                const float a = (float)i / 40.0f * 2.0f * kPi;
+                pts.push_back(Vec2(168.0f + 22.0f * std::cos(a) + 0.4f * (float)i, 48.0f + 22.0f * std::sin(a)));
+            }
+            starts.push_back(0);
+            stroke({Vec2(134, 64), Vec2(170, 46), Vec2(214, 30)});
+            stroke({Vec2(214, 66)});
+            draw(6.0f, glass);
+            // three strokes through one point, glowing
+            stroke({Vec2(250, 18), Vec2(274, 50), Vec2(296, 80)});
+            stroke({Vec2(298, 22), Vec2(274, 50), Vec2(248, 78)});
+            stroke({Vec2(240, 50), Vec2(274, 50), Vec2(308, 50)});
+            draw(5.0f, Style().Fill(kTeal.WithAlpha(0.85f)).Glow(kTeal, 10, 0.7f));
+            // a lattice of short strokes, 11 x 3 of them, over many data instances: filled, with a shadow
+            for (int j = 0; j < 3; ++j)
+                for (int i = 0; i < 11; ++i)
+                {
+                    const float x = 18.0f + 26.0f * (float)i + 3.0f * (float)j, y = 112.0f + 24.0f * (float)j;
+                    stroke({Vec2(x, y), Vec2(x + 12.0f, y + 10.0f), Vec2(x + 26.0f, y + 6.0f)});
+                    stroke({Vec2(x + 20.0f, y - 6.0f), Vec2(x + 10.0f, y + 16.0f)});
+                }
+            draw(4.0f, Style().Fill(kOrange.WithAlpha(0.9f)).Shadow(Color::Black(0.5f), 6, Vec2(1, 3)));
+            // handwriting's crossings in glass over light: a loop of a letter over the next one's stem
+            for (int i = 0; i <= 60; ++i)
+            {
+                const float t = (float)i / 60.0f;
+                pts.push_back(Vec2(30.0f + 120.0f * t + 14.0f * std::sin(t * 25.0f), 205.0f - 18.0f * std::cos(t * 25.0f)));
+            }
+            starts.push_back(0);
+            stroke({Vec2(60, 180), Vec2(150, 196), Vec2(176, 214)});
+            stroke({Vec2(120, 222), Vec2(126, 176)});
+            draw(5.0f, Style().Glass(Glass(1, 10, 2.5f)).Shadow(Color::Black(0.3f), 8, Vec2(0, 4)));
+        }
+
         void CountCallback(const DrawList&, const DrawCmd& cmd, void*) { ++*static_cast<int*>(cmd.userData); }
 
         // The glass scene with a host callback between the backdrop's content and the first glass: the pass the host
@@ -1196,6 +1264,16 @@ namespace esia::conformance
                                                  "nearest edge among hundreds",
                                    &PathLines);
             pathLines.tolerance = glassTolerance;
+            Scene& pathStrokes = add("path_strokes", "strokes crossing as one shape (Painter::Polylines): a t, an x, a loop through a line, "
+                                                     "three strokes through a point, a dot, a lattice over many data instances - glass, "
+                                                     "glow, a fill with a shadow - one surface where they cross",
+                                     &PathStrokes);
+            pathStrokes.tolerance = glassTolerance;
+            Scene& pathStrokeRows = add("path_stroke_rows", "the path_strokes scene with 2 FX instances per row of the instance texture",
+                                        &PathStrokes);
+            pathStrokeRows.golden = "path_strokes";
+            pathStrokeRows.tolerance = glassTolerance;
+            pathStrokeRows.fxInstancesPerRow = 2;
             Scene& pathLineRows = add("path_line_rows", "the path_lines scene with 2 FX instances per row of the instance texture (FxStorage::Texture: "
                                                         "the data instances of long paths across rows)",
                                       &PathLines);

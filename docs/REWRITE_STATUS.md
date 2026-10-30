@@ -42,6 +42,11 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**Several strokes as one shape** (2026-10-31, in Esia): `Painter::Polylines` draws strokes that cross or touch - a
+handwriting's crossed t, a capital's bar running on into its stem - as one surface: one glass, one shadow, one glow,
+where shapes drawn one after another lie over each other, rim over rim. Every other image of every backend byte for
+byte as before.
+
 **Open paths take only the points that can be nearest** (2026-10-31, in Esia): the distance to a long polyline in glass,
 with a shadow or a glow - a handwritten title of 650 points, every pixel of its strokes' quads measuring every point
 twice - passes over the quarters of its points too far to hold the nearest edge, with the same distance from the same
@@ -177,6 +182,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Several strokes as one shape](#several-strokes-as-one-shape)
 * [Open paths take only the points that can be nearest](#open-paths-take-only-the-points-that-can-be-nearest)
 * [Draw lists recorded and appended again](#draw-lists-recorded-and-appended-again)
 * [Glass shading cost](#glass-shading-cost)
@@ -223,6 +229,37 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Several strokes as one shape
+
+Strokes drawn one after another each have their own glass: where they cross, the one drawn later lies over the first
+with its own rim, bevel and shadow - two panes, not one surface (a handwriting's t and x, the bar of an H over its stems;
+2026-10-31). Glass that touches should melt together, as one piece.
+
+### What changed
+
+* `Painter::Polylines(points, strokeStart, strokes, thickness, style, flags)`: the strokes as one FX path. Each
+  stroke's path is the one `Polyline` builds; each starts on a quarter of a data instance of its own - the stroke
+  before ends in its last point repeated up to it (edges of no length: its round end as before) - and that quarter's
+  point before (`fx::kPathBeforeRow`) is its own first point, so no edge joins it to the stroke before. A stroke of one
+  point is a dot. Plain colors, and more than `fx::kPathMaxPoints` points in all: `Polyline` each.
+* Past shader model 3 the distance reads the quarters' points before as it did (`PathNearestOpen`). Shader model 3 takes
+  every edge in turn and starts a stroke afresh where a quarter's point before is its own first point (`PathBeforeOf`);
+  to keep its full shader within 4096 instruction slots, the glass's normal of a path there is the gradient its
+  coverage measured at the same pixel (`ShapeNormal`): the same numbers, one loop over the points fewer.
+
+### Verified
+
+* Byte for byte: the conformance suite's 39 scenes on Direct3D 9, 10, 11, 12, OpenGL, GLES and Vulkan (272 images)
+  against the build before, both with the shader library made by the same tools; new scenes `path_strokes` (a t, an x,
+  a loop with a line and a dot, a star with a glow, a lattice of 11 x 3 strokes, joined loops of handwriting) and
+  `path_stroke_rows` (the same, two instances to a row of the instance texture).
+* `Painter.PolylinesAreOneShape`: the path's points, the quarters' points before and bounds; plain colors a polyline
+  each. ctest 44 / 44 (clang-cl, every backend), MSVC `/W4 /WX`, the GNU flags on the changed files.
+
+### Not done
+
+* The shader library (`src/esia/shaders/generated`) is the Shaders workflow's to regenerate before a push.
 
 ## Open paths take only the points that can be nearest
 
