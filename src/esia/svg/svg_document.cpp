@@ -8,8 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <fstream>
-#include <iterator>
+#include <cstdio>
 #include <unordered_map>
 
 namespace esia::svg::detail
@@ -1905,7 +1904,9 @@ namespace esia::svg
 {
     Document Document::Parse(std::string_view text, std::string* error)
     {
-        auto tree = std::make_shared<detail::Tree>();
+        // not make_shared: its control block compares type_info, and MinGW's libstdc++ then defines that comparison
+        // twice (inline here and in its own tinfo.o: a duplicate symbol for lld)
+        std::shared_ptr<detail::Tree> tree(new detail::Tree());
         if (!detail::BuildTree(text, *tree, error))
             return {};
         static std::atomic<std::uint64_t> next{1};
@@ -1917,14 +1918,18 @@ namespace esia::svg
 
     Document Document::Load(const std::string& path, std::string* error)
     {
-        std::ifstream f(path, std::ios::binary);
+        std::FILE* f = std::fopen(path.c_str(), "rb");
         if (!f)
         {
             if (error)
                 *error = "cannot open " + path;
             return {};
         }
-        const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::string text;
+        char buf[1 << 16];
+        for (std::size_t n; (n = std::fread(buf, 1, sizeof(buf), f)) > 0;)
+            text.append(buf, n);
+        std::fclose(f);
         return Parse(text, error);
     }
 

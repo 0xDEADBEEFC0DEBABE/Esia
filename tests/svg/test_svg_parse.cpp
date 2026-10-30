@@ -6,6 +6,7 @@
 #include "svg_internal.hpp"
 #include "svg_xml.hpp"
 #include <cmath>
+#include <cstdio>
 #include <string>
 
 using namespace esia;
@@ -99,6 +100,23 @@ ESIA_TEST(SvgPathData, BoundsOfCurves)
     AddEllipse(c, 5.0f, 6.0f, 3.0f, 2.0f);
     ComputeBounds(c);
     ESIA_CHECK(std::fabs(c.bounds.min.x - 2.0f) < 1e-4f && std::fabs(c.bounds.max.y - 8.0f) < 1e-4f && std::fabs(c.bounds.min.y - 4.0f) < 1e-4f);
+}
+
+ESIA_TEST(SvgDocument, LoadFromAFile)
+{
+    std::string error;
+    ESIA_CHECK(Document::Load("no-such-file.svg", &error).Empty() && error.find("cannot open") == 0);
+    const char* path = "esia_svg_load_test.svg";
+    std::FILE* f = std::fopen(path, "wb");
+    ESIA_CHECK(f != nullptr);
+    if (!f)
+        return;
+    const std::string text = "<svg viewBox='0 0 24 12'><rect width='24' height='12'/></svg>";
+    std::fwrite(text.data(), 1, text.size(), f);
+    std::fclose(f);
+    const Document d = Document::Load(path, &error);
+    std::remove(path);
+    ESIA_CHECK(!d.Empty() && d.Size() == Vec2(24.0f, 12.0f));
 }
 
 ESIA_TEST(SvgDocument, SizeAndUnits)
