@@ -6,6 +6,7 @@
 #   esia_render    Painter, frame planner and renderer on the RHI
 #   esia_text      text interface, the analytic glyph rasterizer, the glyph atlas and the system font lookup
 #   esia_text_ft   FreeType + HarfBuzz text system (ESIA_TEXT_FREETYPE; ESIA_TEXT_DEPS=auto|bundled|system)
+#   esia_svg       SVG to textures: the parser, the rasterizer with exact area coverage, an atlas of rasterized files
 #   esia_rhi_<n>   one target per backend, from src/esia/rhi/<n>/ (ESIA_BACKEND_<N>)
 #   esia_ui        a widget layer, where the tree has one (src/esia/ui: EsiaGUI's liquid-glass widgets)
 #   esia_platform_win32   the Win32 platform layer: input, IME, DPI, cursor, clipboard (ESIA_PLATFORM_WIN32)
@@ -125,6 +126,20 @@ else()
         message(STATUS "Esia text: system fonts from the standard font directories (no fontconfig)")
     endif()
 endif()
+
+# ------------------------------------------------------------------ SVG
+# SVG to textures (include/esia/svg/svg.hpp): parsed once, rasterized at the size drawn, packed into the text atlas's
+# kind of pages and drawn with Painter::Image.
+add_library(esia_svg STATIC
+    svg/svg_xml.cpp
+    svg/svg_document.cpp
+    svg/svg_path.cpp
+    svg/svg_raster.cpp
+    svg/svg_render.cpp
+    svg/svg_atlas.cpp)
+target_link_libraries(esia_svg PUBLIC esia_core PRIVATE esia_render esia_text)
+esia_target_defaults(esia_svg)
+add_library(esia::svg ALIAS esia_svg)
 
 # FreeType + HarfBuzz: built from pinned sources, or the system's packages (ESIA_TEXT_DEPS, cmake/EsiaTextDeps.cmake)
 if(ESIA_TEXT_FREETYPE)

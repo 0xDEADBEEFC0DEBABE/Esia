@@ -42,6 +42,10 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**SVG to textures** (2026-10-30, in Esia): SVG files parsed once and rasterized at the size drawn into texture pages, with
+exact area coverage (overlaps, both fill rules and a stroke's pieces resolved in the sweep); monochrome icons as one mask
+in any color; a 16-pixel icon in 7 us.
+
 **Polylines on the processor's vectors** (2026-10-30, in Esia): a polyline's loops on AVX-512, AVX2, SSE2 or NEON, chosen
 at run time, every level with the same bits; long dense series in 0.039 ms of CPU on AVX-512 (plain C++ 0.150, Dear
 ImGui 1.92.9b 0.084).
@@ -141,6 +145,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [SVG to textures](#svg-to-textures)
 * [Polylines on the processor's vectors](#polylines-on-the-processors-vectors)
 * [Render-class cost, round 2: much content on screen](#render-class-cost-round-2-much-content-on-screen)
 * [Glass on every shape](#glass-on-every-shape)
@@ -180,6 +185,80 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## SVG to textures
+
+SVG files - icons, illustrations - parsed once and rasterized at the size they are drawn, into texture pages that
+Painter::Image draws (2026-10-30): `include/esia/svg/svg.hpp`, the library `esia::svg`.
+
+### What it does
+
+* `svg::Document::Parse` / `Load`: the XML (comments, DOCTYPE, CDATA, entities); CSS - style attributes and `<style>`
+  sheets with type, class, id, universal, descendant and child selectors, specificity, `!important`, inheritance; path
+  data (every command, numbers and flags without separators); the basic shapes; transforms, viewBox and
+  preserveAspectRatio, nested `svg`, `use` and `symbol`; colors (hex, rgb / rgba, hsl / hsla, the named colors) and
+  `currentColor`; linear and radial gradients (units, transforms, spread methods, focal points, `href` inheritance); fills
+  with both rules; strokes (width, caps, joins, miter limit, dashes, paint-order); opacity; clip paths (both units,
+  nested); `display`, `visibility`, `shape-rendering: crispEdges`. Not drawn: text, images, filters, masks, markers,
+  patterns.
+* `svg::Rasterize`: RGBA8, straight alpha in sRGB (the texture format of images); transparent texels next to the drawing
+  take its colors, so bilinear filtering does not darken its edges. `RasterOptions::mask`: the alpha alone, in white,
+  tinted when drawn.
+* `svg::Atlas`: rasterized documents packed into RGBA8 pages (text::GlyphAtlas's packing and frame rules), keyed by
+  document, size, mode and - where it paints something - currentColor. `svg::Draw` rasterizes at the drawn rectangle's
+  size in physical pixels and draws it on the pixel grid, texels on pixels one to one; a monochrome document (every paint
+  currentColor) is rasterized once, as a mask, and drawn in any color.
+
+### Quality
+
+* Exact area coverage: a pixel gets the area of the filled region in it. The sweep puts each row's monotone chains in
+  order; where they keep apart, the winding count tells which chains bound the area, and only those leave their area in
+  the cells; where they come close (turning points, overlaps, crossings), the row is cut into strips at every vertex and
+  crossing. Overlapping contours, both fill rules and a stroke's overlapping pieces are resolved exactly - the usual
+  |sum| clamped to 1 over-covers such pixels, by up to a quarter of a pixel.
+* Strokes are made in the path's user units (a stroke scaled unevenly keeps its shape there) as pieces wound the same
+  way whose union is the stroke: bands along runs of segments, wedges and caps. A closed convex outline whose inner side
+  folds (a stroke wider than a small circle) is its outer loop less its inner offset, a half-plane intersection.
+* Curves and arcs are flattened within 1/32 pixel, their points moved out by 2/3 of their chords' sagitta: the polygon
+  keeps the curve's area, so curved edges do not come out thinner.
+* Compositing as browsers composite SVG: premultiplied, in sRGB. Group opacity and clipped groups take a layer only where
+  they need one (a group around one shape with one paint passes its opacity to it).
+
+### Verified
+
+* `esia_svg_tests` (24): the parser and CSS; coverage against dense point sampling (64 x 64 points a pixel) for
+  overlapping squares, a pentagram and a bow tie under both rules and unions of groups with their own rules (within
+  0.002); round strokes against "every point within half the width of the path" (within 0.008); strokes wider than their
+  outline's curves (a disc, a ring, folded corners); dashes as SVG 2 places them; gradients, layers, clips, masks, the
+  texels around the drawing, the atlas's cache, Draw on the pixel grid.
+* Against Chrome, its rendering of the same files at the same size compared pixel by pixel in the page: 158 renderings
+  of 80 files - the 63 SVG icons that come with Visual Studio, 16 feature files, two logos - at 16 to 128 pixels. Mean
+  alpha difference 2.8 levels, along edges: Chrome's antialiasing there has 8 levels of coverage (multiples of 32) where
+  Esia's is the area, its edges on whole pixels can sit 0.08 pixel off, and its dashes drift (half a pixel at the top of
+  a dashed circle; Esia's fall where the dash pattern puts them). Two icons Chrome does not draw (attributes without
+  white space between them) Esia does.
+* clang-cl, MSVC `/W4 /WX`, the GNU flags on the new files.
+
+### Measured
+
+Release clang-cl, Ryzen 9 7950X, one thread, that corpus:
+
+| | mean | max |
+| --- | --- | --- |
+| parse a file | 6.7 us | |
+| rasterize at 16 x 16 | 7.3 us | 14 us |
+| at 48 x 48 | 18 us | 30 us |
+| at 128 x 128 | 88 us | 136 us |
+
+At 512 x 512: an empty drawing 0.13 ms, a full opaque rectangle 0.42 ms, a full linear gradient 0.98 ms, a stroke wider
+than its small circle 0.26 ms (8.7 ms as overlapping pieces). Only the drawing's rows and columns are visited; rows turn
+into RGBA8 with SSE2 or NEON (a plain loop elsewhere); a group's layer only where it needs one.
+
+### Not done
+
+* Text, `<image>`, filters, masks, markers, patterns, `vector-effect`.
+* A stroke wider than a tight curve of an open path stays a set of overlapping pieces: exact, slower at large sizes.
+* A row crossed thousands of times: past 256 cuts it goes in strips of 1/32 pixel (coverage within about 1/64 there).
 
 ## Polylines on the processor's vectors
 
