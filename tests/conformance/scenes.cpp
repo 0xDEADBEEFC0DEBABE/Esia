@@ -312,6 +312,71 @@ namespace esia::conformance
             p.Sector(Vec2(282, 200), 16, 38, kPi, kPi * 0.75f, Style().Radius(4).Glass(sector), 2.0f);
         }
 
+        // Open paths of many points - a line of joined loops (a handwriting's rhythm), a figure crossing itself, a
+        // dense zigzag past 256 points, a spiral, lines of 31, 32 and 33 points and one with points repeated - in glass
+        // with shadows, glows and filled with a shadow: every pixel's nearest edge among hundreds
+        void PathLines(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl, Env());
+            Wallpaper(p, dl, Rect(0, 0, 320, 240));
+            std::vector<Vec2> pts;
+            GlassMaterial tube = Glass(0.5f, 16.0f, 3.0f);
+            tube.dispersion = 0.9f;
+            tube.specular = 1.0f;
+            tube.tint = Color(1, 1, 1, 0.16f);
+            tube.rim = Color::White(0.85f);
+            const Style glass = Style().Glass(tube).Shadow(Color::Black(0.35f), 8, Vec2(0, 4));
+            // joined loops, left to right: 300 points
+            for (int i = 0; i < 300; ++i)
+            {
+                const float t = (float)i / 299.0f;
+                pts.push_back(Vec2(16.0f + 170.0f * t + 9.0f * std::sin(t * 41.0f), 44.0f - 17.0f * std::cos(t * 41.0f) + 5.0f * std::sin(t * 6.3f)));
+            }
+            p.Polyline(pts.data(), (int)pts.size(), 6.5f, glass);
+            // a figure crossing itself (3 : 2), 257 points
+            pts.clear();
+            for (int i = 0; i < 257; ++i)
+            {
+                const float t = (float)i / 256.0f * 2.0f * kPi;
+                pts.push_back(Vec2(258.5f + 46.0f * std::sin(3.0f * t + 0.4f), 62.25f + 44.0f * std::sin(2.0f * t)));
+            }
+            p.Polyline(pts.data(), (int)pts.size(), 4.0f, Style().Glass(Glass(2, 10, 2)).Shadow(Color::Black(0.4f), 10, Vec2(2, 5)));
+            // a dense zigzag: 600 points
+            pts.clear();
+            for (int i = 0; i < 600; ++i)
+                pts.push_back(Vec2(14.0f + 0.48f * (float)i, 132.0f + ((i & 1) ? 9.0f : -9.0f) + 6.0f * std::sin((float)i * 0.05f)));
+            p.Polyline(pts.data(), (int)pts.size(), 1.5f, Style().Fill(kTeal.WithAlpha(0.7f)).Glow(kTeal, 8, 0.7f));
+            // a spiral in from its outside: 180 points
+            pts.clear();
+            for (int i = 0; i < 180; ++i)
+            {
+                const float t = (float)i / 179.0f, a = t * 5.0f * 2.0f * kPi, r = 42.0f * (1.0f - 0.85f * t);
+                pts.push_back(Vec2(270.0f + r * std::cos(a), 190.0f + r * std::sin(a)));
+            }
+            p.Polyline(pts.data(), (int)pts.size(), 3.0f, Style().Glass(Glass(4, 12, 2)).Glow(kBlue, 10, 0.6f));
+            // 31, 32 and 33 points: one data instance, a full one, one more
+            for (int k = 0; k < 3; ++k)
+            {
+                pts.clear();
+                const int n = 31 + k;
+                for (int i = 0; i < n; ++i)
+                {
+                    const float t = (float)i / (float)(n - 1);
+                    pts.push_back(Vec2(18.0f + 52.0f * (float)k + 44.0f * t, 172.0f + 22.0f * std::sin(t * 9.0f) + 6.0f * t));
+                }
+                p.Polyline(pts.data(), n, 4.0f, Style().Fill(kOrange.WithAlpha(0.85f)).Shadow(Color::Black(0.45f), 6, Vec2(1, 3)));
+            }
+            // points repeated (edges of no length) and turning back on itself
+            pts.clear();
+            for (int i = 0; i < 70; ++i)
+            {
+                const float t = (float)(i / 2) / 34.0f;
+                pts.push_back(Vec2(176.0f + 40.0f * t + ((i % 7) == 3 ? -12.0f : 0.0f), 214.0f - 18.0f * std::sin(t * 7.0f)));
+            }
+            p.Polyline(pts.data(), (int)pts.size(), 5.0f, Style().Glass(Glass(1, 8, 2.5f)).Shadow(Color::Black(0.3f), 8, Vec2(0, 4)));
+        }
+
         void CountCallback(const DrawList&, const DrawCmd& cmd, void*) { ++*static_cast<int*>(cmd.userData); }
 
         // The glass scene with a host callback between the backdrop's content and the first glass: the pass the host
@@ -1126,6 +1191,17 @@ namespace esia::conformance
             pathRows.golden = "paths";
             pathRows.tolerance = glassTolerance;
             pathRows.fxInstancesPerRow = 2;
+            Scene& pathLines = add("path_lines", "open paths of many points (a line of joined loops, a figure crossing itself, a 600-point zigzag, a "
+                                                 "spiral, 31 / 32 / 33 points, repeated points) in glass, with shadows and glows: every pixel's "
+                                                 "nearest edge among hundreds",
+                                   &PathLines);
+            pathLines.tolerance = glassTolerance;
+            Scene& pathLineRows = add("path_line_rows", "the path_lines scene with 2 FX instances per row of the instance texture (FxStorage::Texture: "
+                                                        "the data instances of long paths across rows)",
+                                      &PathLines);
+            pathLineRows.golden = "path_lines";
+            pathLineRows.tolerance = glassTolerance;
+            pathLineRows.fxInstancesPerRow = 2;
             Scene& reused = add("glass_reused", "the glass scene three times with RenderParams::targetStatic: the third frame's captures come from the "
                                                 "pyramid or from the copies kept aside (temporal reuse), with the same pixels",
                                 &GlassScene);

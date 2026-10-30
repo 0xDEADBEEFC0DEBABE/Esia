@@ -79,6 +79,11 @@ namespace esia::fx
     constexpr std::uint32_t kPathPointsPerData = 32;
     // The most points one path carries (Painter thins longer outlines out).
     constexpr std::uint32_t kPathMaxPoints = 4096;
+    // Beside its points (rows 0 .. kPathPointsPerData / 2 - 1) a data instance holds what lets an open path's distance
+    // pass over points that cannot be the nearest (esia_fx.hlsl, SdPathOpen): rows kPathQuarterRow .. + 3 the bounds
+    // of its quarters (kPathPointsPerData / 4 points each) with the point before each quarter - its first edge's other
+    // end - row kPathBoundsRow the bounds of all four, rows kPathBeforeRow and + 1 those points before (two to a row).
+    constexpr std::uint32_t kPathQuarterRow = 16, kPathBoundsRow = 20, kPathBeforeRow = 21;
     enum class PaintKind : std::uint32_t { Solid = 0, Linear = 1, Radial = 2, Conic = 3, Spectrum = 4 };
 
     struct Instance

@@ -42,6 +42,12 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**Open paths take only the points that can be nearest** (2026-10-31, in Esia): the distance to a long polyline in glass,
+with a shadow or a glow - a handwritten title of 650 points, every pixel of its strokes' quads measuring every point
+twice - passes over the quarters of its points too far to hold the nearest edge, with the same distance from the same
+edge: the intro title's glass 0.305 -> 0.091 ms a frame on an RTX 4080 SUPER, and on a 2008 GPU an estimated 63 - 78 ->
+6 - 11 ms. Every image of every backend byte for byte as before.
+
 **Draw lists recorded and appended again** (2026-10-30, in Esia): a stretch of a draw list - what a widget drew -
 kept as a `DrawRecord` and appended again where the list is in the state it began in, byte for byte what drawing it
 again makes, with the text system's records of where texts were drawn (`DrawNote`) left as the draws would leave them:
@@ -171,6 +177,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Open paths take only the points that can be nearest](#open-paths-take-only-the-points-that-can-be-nearest)
 * [Draw lists recorded and appended again](#draw-lists-recorded-and-appended-again)
 * [Glass shading cost](#glass-shading-cost)
 * [Vulkan frames in flight](#vulkan-frames-in-flight)
@@ -216,6 +223,56 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Open paths take only the points that can be nearest
+
+An FX path's pixel measures its distance to every edge of the path (SdPath), twice for a shape with a shadow or glass
+(its coverage, then the shadow or the surface's normal), over the whole quad of the path - its bounds grown by the
+shadow's reach. A handwritten title in glass (Cipher's intro: three strokes of 181 - 265 points, 218 000 pixels of
+quads at 1080p) is 95 million edge distances a frame, 5.4 billion operations: 0.3 ms on an RTX 4080 SUPER, an estimated
+63 - 78 ms on a GeForce 9600 GT (64 shader cores at 1625 MHz, Direct3D 10; 2026-10-31).
+
+### What changed
+
+* A path's data instances hold, beside their 32 points, the bounds of each quarter of them (8 points) with the point
+  before it - all of the quarter's edges lie inside - the bounds of all four, and those points before
+  (`fx::kPathQuarterRow`, `kPathBoundsRow`, `kPathBeforeRow`: rows 16 - 22, which a data instance left empty). Painter
+  writes them for every path.
+* `SdPath` of an open path (`PathNearestOpen`): the data instance whose bounds lie nearest first - its edges make the
+  distance to beat small - then the others in turn, each passed over when its bounds lie farther than the nearest edge
+  so far, and within each the quarters that do. The margin (1/32 unit, more far from the origin and at long distances)
+  is far above the rounding of the distances, so no edge passed over could have come nearer, nor as near; an edge's place
+  breaks ties, so the edge chosen is the first of the least distance, as when every edge is taken in turn. A run of
+  instances is read from its first texel or row on (`FxAt` / `FxAtNext` / `FxFetchAt`: no division per row where the
+  instances are a texture); the edges skip the even-odd side an open path does not read.
+* Closed paths (their side needs every edge) and shader model 3 (whose full shader has no instruction slots to spare)
+  take every edge as before.
+
+### Verified
+
+* Byte for byte: the conformance suite's 39 scenes on Direct3D 9, 10, 11, 12, OpenGL, GLES and Vulkan (272 images)
+  against the build before, both with the shader library made by the same tools; a new scene, `path_lines` (a line of
+  joined loops, a figure crossing itself, a 600-point zigzag, a spiral, 31 / 32 / 33 points, repeated points, in glass
+  with shadows and glows) and `path_line_rows` (the same across rows of the instance texture). Cipher's intro title on
+  Direct3D 10, 11, 12, Vulkan and OpenGL, written, being written and being unwritten: no pixel differs.
+* `Painter.PathDataBoundsItsQuarters`: the quarters' bounds and points before, open and closed. ctest 44 / 44
+  (clang-cl, every backend), MSVC `/W4 /WX`, the GNU flags on the changed files.
+
+### Measured
+
+Cipher's intro title alone (`CIPHER_LOOK_NO_CHROME`), Direct3D 10, 1920 x 1080, RTX 4080 SUPER: the glass category
+0.305 -> 0.091 ms, the frame's GPU time 0.40 - 0.44 -> 0.185 ms. With every edge taken, the glass time was linear in the
+points (half of them 0.236 ms, a quarter 0.162): the path loop 0.285 ms of 0.375. Counted for the title (two
+evaluations a pixel): 12 851 -> 1 088 operations and 110 -> 37 reads an evaluation. A GeForce 9600 GT (8 multiprocessors
+of 8 cores at 1625 MHz, 4 - 5 warps of these shaders each: 67 - 83 % of its 104 G operations a second) from those
+counts: the title 63 - 78 -> 6 - 11 ms.
+
+### Not done
+
+* Closed paths still take every edge: their even-odd side needs each crossing (a quarter's bounds could stand for its
+  crossings where a pixel's row misses them).
+* The shader library (`src/esia/shaders/generated`) is the Shaders workflow's to regenerate: the SPIR-V, GLSL and MSL
+  of the new code come from it before a push.
 
 ## Draw lists recorded and appended again
 

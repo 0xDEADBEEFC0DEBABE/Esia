@@ -720,20 +720,40 @@ namespace esia
         inst.flags[2] = (std::uint32_t)fx::ShapeKind::Path;
         if (!Submit(inst, s, rest, restGlow))
             return;
-        // the points, two to a row of the data instances right after it (the same command: the same effect and texture)
-        static_assert(fx::kPathPointsPerData * 2 * sizeof(float) <= offsetof(fx::Instance, flags), "a data instance's points stay off its flags row");
-        float row[fx::kPathPointsPerData * 2];
+        // the points, two to a row of the data instances right after it (the same command: the same effect and texture);
+        // beside them each quarter's bounds with the point before it, so that an open path's distance passes over the
+        // quarters too far to hold the nearest edge (fx::kPathQuarterRow)
+        static_assert(fx::kPathPointsPerData * 2 <= fx::kPathQuarterRow * 4, "a data instance's points stay off its quarters' bounds");
+        static_assert((fx::kPathBeforeRow + 2) * 4 * sizeof(float) <= offsetof(fx::Instance, flags), "a data instance's rows stay off its flags row");
+        constexpr int kQuarter = (int)fx::kPathPointsPerData / 4;
+        float rows[(fx::kPathBeforeRow + 2) * 4];
         for (int first = 0; first < n; first += (int)fx::kPathPointsPerData)
         {
             const int m = std::min(n - first, (int)fx::kPathPointsPerData);
+            std::memset(rows, 0, sizeof(rows));
             for (int i = 0; i < m; ++i)
             {
-                row[i * 2] = placed[(std::size_t)(first + i)].x;
-                row[i * 2 + 1] = placed[(std::size_t)(first + i)].y;
+                rows[i * 2] = placed[(std::size_t)(first + i)].x;
+                rows[i * 2 + 1] = placed[(std::size_t)(first + i)].y;
             }
+            esia::Rect all;
+            for (int q = 0; q * kQuarter < m; ++q)
+            {
+                const int i0 = first + q * kQuarter, i1 = std::min(first + m, i0 + kQuarter);
+                // the point before the quarter; the path's first edge comes from its first point (open) or its last one
+                const Vec2 before = placed[i0 > 0 ? (std::size_t)i0 - 1 : open ? 0 : (std::size_t)n - 1];
+                esia::Rect box(before, before);
+                for (int i = i0; i < i1; ++i)
+                    box = box.Union(esia::Rect(placed[(std::size_t)i], placed[(std::size_t)i]));
+                SetRect(rows + (fx::kPathQuarterRow + (std::uint32_t)q) * 4, box);
+                rows[fx::kPathBeforeRow * 4 + (std::uint32_t)q * 2] = before.x;
+                rows[fx::kPathBeforeRow * 4 + (std::uint32_t)q * 2 + 1] = before.y;
+                all = q == 0 ? box : all.Union(box);
+            }
+            SetRect(rows + fx::kPathBoundsRow * 4, all);
             fx::Instance d;
             std::memset(&d, 0, sizeof(d));
-            std::memcpy(&d, row, (std::size_t)m * 2 * sizeof(float));
+            std::memcpy(&d, rows, sizeof(rows));
             d.flags[2] = (std::uint32_t)fx::ShapeKind::PathData;
             Emit(d, s.effect, s.image);
         }

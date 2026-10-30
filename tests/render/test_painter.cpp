@@ -767,6 +767,66 @@ ESIA_TEST(Painter, PolygonsArePathsWithTheirPointsAfterThem)
     ESIA_CHECK(in.size() == 7);
 }
 
+namespace
+{
+    // Whether the data instances after the path at `path` bound each quarter of their points with the point before it
+    // (fx::kPathQuarterRow ..): the path's first edge comes from its first point when open, its last when closed
+    bool QuartersBounded(const DrawList& dl, std::size_t path)
+    {
+        const std::vector<Vec2> pts = PathPoints(dl, path);
+        const int n = (int)pts.size();
+        const bool open = dl.FxInstances()[path].radii[3] > 0.5f;
+        bool ok = n > 0;
+        for (int first = 0; first < n; first += (int)fx::kPathPointsPerData)
+        {
+            float rows[(fx::kPathBeforeRow + 2) * 4];
+            std::memcpy(rows, &dl.FxInstances()[path + 1 + (std::size_t)first / fx::kPathPointsPerData], sizeof(rows));
+            Rect all;
+            for (int q = 0; q < 4 && first + q * 8 < n; ++q)
+            {
+                const int i0 = first + q * 8, i1 = std::min(n, i0 + 8);
+                const Vec2 before = pts[(std::size_t)(i0 > 0 ? i0 - 1 : open ? 0 : n - 1)];
+                Rect box(before, before);
+                for (int i = i0; i < i1; ++i)
+                    box = box.Union(Rect(pts[(std::size_t)i], pts[(std::size_t)i]));
+                const float* b = rows + (fx::kPathQuarterRow + (std::uint32_t)q) * 4;
+                const float* at = rows + fx::kPathBeforeRow * 4 + q * 2;
+                ok = ok && b[0] == box.min.x && b[1] == box.min.y && b[2] == box.max.x && b[3] == box.max.y && at[0] == before.x && at[1] == before.y;
+                all = q == 0 ? box : all.Union(box);
+            }
+            const float* b = rows + fx::kPathBoundsRow * 4;
+            ok = ok && b[0] == all.min.x && b[1] == all.min.y && b[2] == all.max.x && b[3] == all.max.y;
+        }
+        return ok;
+    }
+}
+
+// Beside its points a data instance carries each quarter's bounds with the point before it (its first edge's other
+// end), all four's bounds and those points: an open path's distance passes over the quarters too far to hold the
+// nearest edge (esia_fx.hlsl, SdPathOpen).
+ESIA_TEST(Painter, PathDataBoundsItsQuarters)
+{
+    DrawList dl = MakeList();
+    Painter p(dl, Fx());
+    std::vector<Vec2> wave;
+    for (int i = 0; i < 70; ++i)
+        wave.push_back(Vec2(10.0f + 3.0f * (float)i, 50.0f + 20.0f * std::sin((float)i * 0.3f)));
+    p.Polyline(wave.data(), 70, 4.0f, Style().Glass(GlassMaterial()));
+    const auto& in = dl.FxInstances();
+    ESIA_CHECK(in.size() == 4 && (in[0].flags[0] & fx::kPath) && in[0].radii[2] == 70 && in[0].radii[3] == 1.0f);
+    ESIA_CHECK(QuartersBounded(dl, 0));
+    // closed: its first quarter's point before is its last point
+    std::vector<Vec2> ring;
+    for (int i = 0; i < 40; ++i)
+        ring.push_back(Vec2(200, 150) + Vec2(std::cos(kTau * (float)i / 40.0f), std::sin(kTau * (float)i / 40.0f)) * 50.0f);
+    p.Polygon(ring.data(), 40, Style().Fill(Color::White()));
+    ESIA_CHECK(in.size() == 7 && in[4].radii[3] == 0.0f && QuartersBounded(dl, 4));
+    // a short line: one quarter of two points
+    const Vec2 two[2] = {Vec2(5, 5), Vec2(30, 9)};
+    p.Polyline(two, 2, 3.0f, Style().Glass(GlassMaterial()));
+    ESIA_CHECK(in.size() == 9 && QuartersBounded(dl, 7));
+}
+
 // Rounded corners: the outline is inset by the radius and the shader takes the radius off its distance again - convex
 // corners become exact arcs, the bounds stay the polygon's. A concave corner gets a fillet of points; a corner takes
 // its radius as far as its edges allow.
