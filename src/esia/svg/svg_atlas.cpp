@@ -344,6 +344,7 @@ namespace esia::svg
         const float k = painter.ScaleFactor();
         if (!(k > 0.0f))
             return;
+        painter.GetDrawList().BreakRecording();   // its quads depend on where its pixels are this frame (a draw memo keeps none)
         const float px = painter.Env().pixelScale > 0.0f ? painter.Env().pixelScale : 1.0f;
         RasterOptions o;
         o.mask = mask || doc.Monochrome();

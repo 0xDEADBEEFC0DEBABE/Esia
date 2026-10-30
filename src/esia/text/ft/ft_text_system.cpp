@@ -251,7 +251,7 @@ namespace esia::text
             // font id, size, wrap width, flags, and the density when the advances are hinted (the cache key's inputs)
             std::uint32_t params[5] = {};
             std::vector<PlacedGlyph> glyphs;
-            TextMetrics metrics;
+            TextMetrics metrics;   // (metrics.layout: its serial, given whenever it is laid out; 0 out of the cache)
             bool bitmapGlyphs = false;   // a glyph of a bitmap font among them (PlaceQuads puts those on whole pixels)
             std::uint64_t lastFrame = 0;
             // Draw's glyph quads, from its last call: positions in physical pixels from the whole pixel at the text's
@@ -482,6 +482,8 @@ namespace esia::text
                 layouts_.clear();   // texts laid out before may pick other fonts now
                 lastLayout_ = nullptr;   // it was one of them
                 layoutFront_.fill(nullptr);
+                bySerial_.fill({});
+                ++drawGeneration_;   // (a glyph drawn alone may come from another font too)
             }
 
             // ------------------------------------------------------------------ frame
@@ -492,6 +494,70 @@ namespace esia::text
                 return atlas_.Add(key | (1ull << 63), bitmap, Rect());
             }
             std::uint64_t TileGeneration() override { return serial_ << 32 | ((std::uint64_t)atlas_.Resets() + 1u); }
+
+            // ---- draws done again (DrawNote)
+            void SetDrawNotes(std::vector<DrawNote>* notes) override { notes_ = notes; }
+
+            std::uint64_t DrawGeneration() override { return serial_ << 32 | (drawGeneration_ & 0xFFFFFFFFu); }
+
+            bool ReplayDraws(std::span<const DrawNote> notes) override
+            {
+                if (!CanReplayDraws(notes))
+                    return false;
+                for (const DrawNote& n : notes)
+                {
+                    Layout& l = *bySerial_[n.layout & (kSerialSlots - 1)].layout;
+                    (void)RestWeight(n.outline ? l.outlineDraws : l.fillDraws, n.pos, n.scale);
+                    l.lastFrame = frame_;   // in use, as drawn
+                }
+                return true;
+            }
+
+            void KeepLayouts(std::span<const std::uint64_t> layouts) override
+            {
+                for (const std::uint64_t serial : layouts)
+                {
+                    const SerialSlot& s = bySerial_[serial & (kSerialSlots - 1)];
+                    if (serial != 0 && s.serial == serial)
+                        s.layout->lastFrame = frame_;
+                }
+            }
+
+            bool CanReplayDraws(std::span<const DrawNote> notes) override
+            {
+                // Each draw as RestWeight would take it now: the next record of its layout this frame (after the notes
+                // before it of the same layout), seen, where it is, at rest.
+                for (std::size_t i = 0; i < notes.size(); ++i)
+                {
+                    const DrawNote& n = notes[i];
+                    const SerialSlot& s = bySerial_[n.layout & (kSerialSlots - 1)];
+                    if (n.layout == 0 || s.serial != n.layout || !rendering_.smoothMotion || !(n.rest >= 1.0f))
+                        return false;
+                    const Layout::Draws& d = n.outline ? s.layout->outlineDraws : s.layout->fillDraws;
+                    std::size_t k = d.frame == frame_ ? d.count : 0;
+                    for (std::size_t j = 0; j < i; ++j)
+                        k += notes[j].layout == n.layout && notes[j].outline == n.outline;
+                    if (k >= d.motion.size())
+                        return false;
+                    const Layout::Motion& m = d.motion[k];
+                    if (!m.seen || LengthSq(n.pos - m.pos) > 1e-8f || n.scale != m.scale)
+                        return false;   // moved: drawn in motion
+                    const std::uint32_t still = m.still < kRestFrames ? m.still + 1 : m.still;
+                    const float t = params_.time >= 0.0 ? (float)((params_.time - m.since) / kRestSeconds) : (float)still / (float)kRestFrames;
+                    if (!(SmoothStep(0.0f, 1.0f, t) >= 1.0f))
+                        return false;   // still settling
+                }
+                return true;
+            }
+
+            // A layout leaving the cache (or laid out again): its serial finds it no more
+            void Forget(Layout& layout)
+            {
+                SerialSlot& s = bySerial_[layout.metrics.layout & (kSerialSlots - 1)];
+                if (layout.metrics.layout != 0 && s.serial == layout.metrics.layout)
+                    s = SerialSlot{};
+                layout.metrics.layout = 0;
+            }
 
             void SetRendering(const TextRendering& rendering) override { pending_ = rendering; }
             TextRendering Rendering() const override { return pending_; }
@@ -510,12 +576,14 @@ namespace esia::text
                     ApplyRendering();
                     atlas_.StartOver();
                     hintedAdvanceCache_.clear();
+                    ++drawGeneration_;
                     if (advances || HintedAdvances())
                     {
                         layouts_.clear();
                         spareLayouts_.clear();
                         layoutFront_.fill(nullptr);
                         lastLayout_ = nullptr;
+                        bySerial_.fill({});
                     }
                 }
                 if (bitmapFaces_ > 0 && params_.pixelsPerUnit != layoutPixelsPerUnit_)
@@ -524,12 +592,22 @@ namespace esia::text
                     layouts_.clear();
                     spareLayouts_.clear();
                     layoutFront_.fill(nullptr);
+                    bySerial_.fill({});
                 }
+                if (params_.pixelsPerUnit != layoutPixelsPerUnit_)
+                    ++drawGeneration_;
                 layoutPixelsPerUnit_ = params_.pixelsPerUnit;
                 ++frame_;
                 atlas_.BeginFrame();
                 colorAtlas_.BeginFrame();
                 fieldAtlas_.BeginFrame();
+                const std::uint64_t resets[3] = {(std::uint64_t)atlas_.Resets(), (std::uint64_t)colorAtlas_.Resets(), (std::uint64_t)fieldAtlas_.Resets()};
+                if (std::memcmp(resets, lastResets_, sizeof(resets)) != 0)
+                {
+                    // pages started over: drawn quads point at other glyphs now
+                    std::memcpy(lastResets_, resets, sizeof(resets));
+                    ++drawGeneration_;
+                }
                 lastLayout_ = nullptr;   // (it may leave the cache now)
                 // layouts unused for a while leave the cache, and wait (with their storage) to hold the next new texts:
                 // text that changes every frame (a frame rate, a timer) does not allocate once the cache is warm
@@ -551,6 +629,7 @@ namespace esia::text
                             Layout*& front = layoutFront_[(std::size_t)(key ^ (key >> 32)) & (kLayoutFront - 1)];
                             if (front == &it->second)
                                 front = nullptr;
+                            Forget(it->second);
                             if (spareLayouts_.size() < kLayoutCacheLimit / 4)
                                 spareLayouts_.push_back(layouts_.extract(it));
                             else
@@ -707,6 +786,8 @@ namespace esia::text
                 // in motion: the design's outlines at quarter pixels both ways; at rest: this rendering; between: both.
                 // On whole pixels a text is placed the same everywhere: it never moves by a fraction to smooth.
                 const float rest = rendering_.smoothMotion && !snap ? RestWeight(layout->fillDraws, pos, scale) : 1.0f;
+                if (notes_ && rendering_.smoothMotion && !snap)
+                    notes_->push_back({layout->metrics.layout, pos, scale, rest, 0});
                 if (rest < 1.0f)
                     DrawQuads(dl, *layout, layout->moving, font, pos, color.WithAlpha(color.a * (1.0f - rest)), scale, 0, true, false);
                 if (rest > 0.0f)
@@ -815,7 +896,7 @@ namespace esia::text
                 const std::uint32_t k = draws.count++;
                 if (draws.motion.size() <= k)
                     draws.motion.resize(k + 1);
-                Layout::Motion& m = draws.motion[k];
+                Layout::Motion& m = draws.motion[k];   // (ReplayDraws foresees this as it is done here)
                 const bool moved = m.seen && (LengthSq(pos - m.pos) > 1e-8f || scale != m.scale);
                 if (!m.seen)
                 {
@@ -1065,6 +1146,8 @@ namespace esia::text
                 const std::uint32_t width = OutlineQ(outline.width * scale * params_.pixelsPerUnit);
                 const bool snap = (flags & TextFlags_PixelSnap) != 0;
                 const float rest = rendering_.smoothMotion && !snap ? RestWeight(layout->outlineDraws, pos, scale) : 1.0f;
+                if (notes_ && rendering_.smoothMotion && !snap)
+                    notes_->push_back({layout->metrics.layout, pos, scale, rest, 1});
                 if (rest < 1.0f)
                     DrawQuads(dl, *layout, layout->movingOutline, font, pos, outline.color.WithAlpha(outline.color.a * (1.0f - rest)), scale, width, true,
                               false);
@@ -1694,7 +1777,10 @@ namespace esia::text
                         s->generation = s->slotGeneration = s->classGeneration = 0;
                         s->classScore = 0;
                     }
+                    Forget(layout);   // (before BuildLayout, which sets its metrics)
                     BuildLayout(font, text, wrapWidth, flags, layout);
+                    layout.metrics.layout = ++layoutSerial_;
+                    bySerial_[layout.metrics.layout & (kSerialSlots - 1)] = {layout.metrics.layout, &layout};
                 }
                 layout.lastFrame = frame_;
                 lastLayout_ = &layout;
@@ -2778,6 +2864,19 @@ namespace esia::text
 
             // TextRendering: in use, and asked for (SetRendering; it takes over at the next NewFrame)
             TextRendering rendering_, pending_;
+            // draws done again (DrawNote): the layouts by serial (direct: a serial whose slot another took is not found,
+            // and its draw is done again rather than replayed), the notes being kept, what changes drawn text
+            static constexpr std::size_t kSerialSlots = 2048;
+            struct SerialSlot
+            {
+                std::uint64_t serial = 0;
+                Layout* layout = nullptr;
+            };
+            std::array<SerialSlot, kSerialSlots> bySerial_{};
+            std::uint64_t layoutSerial_ = serial_ << 32;   // (unique among the text systems too)
+            std::vector<DrawNote>* notes_ = nullptr;
+            std::uint64_t drawGeneration_ = 1;
+            std::uint64_t lastResets_[3] = {};
             bool wholePixelPens_ = false;   // the outlines are hinted across too (vertical stems), or the advances: pens on whole pixels
             std::unordered_map<std::uint64_t, int, IntHash> hintedAdvanceCache_;   // face, glyph, 26.6 ppem -> pixels
         };

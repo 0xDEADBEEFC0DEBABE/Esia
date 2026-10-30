@@ -328,3 +328,172 @@ ESIA_TEST(DrawList, CoverageQuadsJoinTheGlyphsOfTheirPage)
     ESIA_CHECK(dl.Commands().size() == 3 && dl.Commands()[2].texture == 44 && !dl.Commands()[2].anyTexture && dl.Commands()[2].count == 2);
     dl.PopClipRect();
 }
+
+// ---------------------------------------------------------------- recording (DrawRecord)
+namespace
+{
+    // the same lists: every array byte for byte, every command field for field
+    bool SameList(const DrawList& a, const DrawList& b)
+    {
+        const auto bytes = [](const auto& x, const auto& y) {
+            return x.size() == y.size() && (x.empty() || std::memcmp(x.data(), y.data(), x.size() * sizeof(x[0])) == 0);
+        };
+        if (!bytes(a.Vertices(), b.Vertices()) || !bytes(a.Indices(), b.Indices()) || !bytes(a.Quads(), b.Quads()) ||
+            !bytes(a.FxInstances(), b.FxInstances()) || a.Commands().size() != b.Commands().size() || a.Layers().size() != b.Layers().size())
+            return false;
+        for (std::size_t i = 0; i < a.Commands().size(); ++i)
+        {
+            const DrawCmd &x = a.Commands()[i], &y = b.Commands()[i];
+            if (x.kind != y.kind || !(x.clip == y.clip) || x.texture != y.texture || x.anyTexture != y.anyTexture || x.shapes != y.shapes ||
+                x.first != y.first || x.count != y.count || x.effect != y.effect || x.payload != y.payload || x.callback != y.callback ||
+                x.userData != y.userData || x.vtxFirst != y.vtxFirst || x.vtxEnd != y.vtxEnd || !(x.vtxBounds == y.vtxBounds))
+                return false;
+        }
+        return true;
+    }
+
+    // what other widgets drew before: a label's glyph on page 7 at `x`, `rects` filled rectangles before it
+    void Before(DrawList& dl, float x, int rects)
+    {
+        dl.Reset(Rect(0, 0, 400, 300));
+        for (int i = 0; i < rects; ++i)
+            dl.AddRectFilled(Rect(x + (float)i, 50, x + (float)i + 0.5f, 60), 0xFF102030u);
+        DrawList::QuadWriter w = dl.BeginQuads(7, 1);
+        w.Add(Rect(x, 40, x + 5, 48), Vec2(0, 0), Vec2(0.25f, 0.25f), 0xFFFFFFFFu);
+        dl.EndQuads(w);
+    }
+
+    // a widget's drawing at x: its label's glyphs on page 7 (they join the glyph before them), a shape, a rectangle in
+    // a clip of its own, an FX shape
+    void Widget(DrawList& dl, float x)
+    {
+        DrawList::QuadWriter w = dl.BeginQuads(7, 3);
+        w.Add(Rect(x, 0, x + 5, 8), Vec2(0, 0), Vec2(0.5f, 0.5f), 0xFF00FF00u);
+        w.Add(Rect(x + 6, 0, x + 11, 8), Vec2(0.5f, 0), Vec2(1, 0.5f), 0xFF00FF00u);
+        dl.EndQuads(w);
+        QuadInstance s;
+        s.SetShape(QuadShape::Fill, Rect(x, 10, x + 20, 20), 4.0f, 0.6f, 0.0f, 0.0f, 0xFF336699u);
+        dl.AddShapeQuad(s);
+        dl.PushClipRect(Rect(x, 0, x + 30, 30));
+        dl.AddRectFilled(Rect(x, 22, x + 9, 28), 0x80FFFFFFu);
+        dl.PopClipRect();
+        fx::Instance inst;
+        std::memset(&inst, 0, sizeof(inst));
+        inst.rect[0] = x;
+        inst.rect[1] = 30;
+        inst.rect[2] = x + 40;
+        inst.rect[3] = 50;
+        dl.AddFx(inst, 3, 0);
+        dl.AddFx(inst, 3, 0);
+    }
+}
+
+// A widget's drawing recorded last frame and appended this frame after other content - other glyphs before it on its
+// label's page (it joins their command), more geometry (its indices move) - is what drawing it again makes; and a
+// recording leaves the list as drawing without one does.
+ESIA_TEST(DrawList, ReplayAppendsWhatDrawingWould)
+{
+    DrawList recorded, plain;
+    DrawRecord rec;
+    Before(recorded, 3.0f, 1);
+    recorded.BeginRecord();
+    ESIA_CHECK(recorded.Recording());
+    Widget(recorded, 50.0f);
+    ESIA_CHECK(recorded.EndRecord(rec) && !recorded.Recording());
+    ESIA_CHECK(rec.took && rec.addCount == 3 && rec.cmds.size() == 2);   // the glyphs and the shape joined; geometry, FX
+    Before(plain, 3.0f, 1);
+    Widget(plain, 50.0f);
+    ESIA_CHECK(SameList(recorded, plain));
+
+    DrawList drawn, replayed;
+    Before(drawn, 7.25f, 3);
+    Widget(drawn, 50.0f);
+    Before(replayed, 7.25f, 3);
+    ESIA_CHECK(replayed.CanReplay(rec));
+    replayed.Replay(rec);
+    ESIA_CHECK(SameList(drawn, replayed));
+    // twice in a row: the second after the first, as drawing it twice
+    ESIA_CHECK(!replayed.CanReplay(rec));   // (its last command is now an FX shape, not the glyphs it began after)
+    // a record kept from the second drawing replays after the first
+    DrawRecord second;
+    drawn.BeginRecord();
+    Widget(drawn, 50.0f);
+    ESIA_CHECK(drawn.EndRecord(second));
+    ESIA_CHECK(replayed.CanReplay(second));
+    replayed.Replay(second);
+    ESIA_CHECK(SameList(drawn, replayed));
+    // the same stretch recorded again: the same record (the widget layer's check)
+    DrawRecord again;
+    DrawList other;
+    Before(other, 9.0f, 2);
+    other.BeginRecord();
+    Widget(other, 50.0f);
+    ESIA_CHECK(other.EndRecord(again) && again == rec);
+    DrawRecord moved;
+    Before(other, 9.0f, 2);
+    other.BeginRecord();
+    Widget(other, 51.0f);
+    ESIA_CHECK(other.EndRecord(moved) && !(moved == rec));
+}
+
+// A record is appended only where the list is in the state its stretch began in.
+ESIA_TEST(DrawList, ReplayNeedsTheStateItBeganIn)
+{
+    DrawList dl;
+    DrawRecord rec;
+    Before(dl, 3.0f, 0);
+    dl.BeginRecord();
+    Widget(dl, 50.0f);
+    ESIA_CHECK(dl.EndRecord(rec));
+
+    DrawList other;
+    Before(other, 3.0f, 0);
+    ESIA_CHECK(other.CanReplay(rec));
+    other.AddQuad(8, Rect(0, 0, 4, 4), Vec2(0, 0), Vec2(1, 1), 0xFFFFFFFFu);   // its last command on another page
+    ESIA_CHECK(!other.CanReplay(rec));
+    Before(other, 3.0f, 0);
+    other.Mark();   // nothing joins the glyphs before
+    ESIA_CHECK(!other.CanReplay(rec));
+    Before(other, 3.0f, 0);
+    other.PushClipRect(Rect(0, 0, 200, 200));
+    ESIA_CHECK(!other.CanReplay(rec));
+    other.PopClipRect();
+    other.PushTexture(5);
+    ESIA_CHECK(!other.CanReplay(rec));
+    other.PopTexture();
+    ESIA_CHECK(other.CanReplay(rec));
+    other.Reset(Rect(0, 0, 400, 300));   // nothing before it
+    ESIA_CHECK(!other.CanReplay(rec));
+}
+
+// A recording that reaches into what lay before it is not kept, and the list is what it is unrecorded.
+ESIA_TEST(DrawList, RecordingsThatReachBackAreNotKept)
+{
+    const auto check = [](const auto& draw) {
+        DrawList recorded, plain;
+        DrawRecord rec;
+        Before(recorded, 3.0f, 2);
+        recorded.PushClipRect(Rect(0, 0, 300, 300));
+        recorded.BeginRecord();
+        draw(recorded);
+        ESIA_CHECK(!recorded.EndRecord(rec));
+        ESIA_CHECK(rec.cmds.empty() && rec.quads.empty());
+        Before(plain, 3.0f, 2);
+        plain.PushClipRect(Rect(0, 0, 300, 300));
+        draw(plain);
+        ESIA_CHECK(SameList(recorded, plain));
+    };
+    check([](DrawList& dl) { Widget(dl, 50.0f); dl.Mark(); Widget(dl, 60.0f); });
+    check([](DrawList& dl) { Widget(dl, 50.0f); dl.PopClipRect(); dl.PushClipRect(Rect(0, 0, 300, 300)); });   // a clip from before
+    check([](DrawList& dl) { dl.BeginLayer(fx::LayerParams{}); Widget(dl, 50.0f); dl.EndLayer(); });
+    check([](DrawList& dl) { const std::size_t from = dl.Commands().size(); Widget(dl, 50.0f); dl.MoveCommands(from, 0); });
+    check([](DrawList& dl) {
+        // a scale that rewrites the glyphs before it too: their bounds refreshed
+        Widget(dl, 50.0f);
+        for (QuadInstance& q : dl.Quads())
+            q.rect[2] += 1.0f;
+        dl.RefreshBounds(0, 0);
+    });
+    check([](DrawList& dl) { Widget(dl, 50.0f); dl.PushClipRect(Rect(0, 0, 10, 10)); });   // left pushed
+    check([](DrawList& dl) { Widget(dl, 50.0f); dl.BreakRecording(); });                    // drawn from live state
+}

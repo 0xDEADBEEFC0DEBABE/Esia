@@ -42,6 +42,11 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**Draw lists recorded and appended again** (2026-10-30, in Esia): a stretch of a draw list - what a widget drew -
+kept as a `DrawRecord` and appended again where the list is in the state it began in, byte for byte what drawing it
+again makes, with the text system's records of where texts were drawn (`DrawNote`) left as the draws would leave them:
+the widget layer's draw memos stand on it.
+
 **Glass shading cost** (2026-10-30, in Esia): what glass costs the GPU - the UI light nothing measurable (the shader paid
 for it with or without it), a panel's backdrop capture 9 to 11 us, mostly its passes' fixed cost - and glass shaded 5 to
 8 % faster on Direct3D 11 / 12, Vulkan and OpenGL with the same pixels: the light's direction and the rim's light computed
@@ -166,6 +171,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Draw lists recorded and appended again](#draw-lists-recorded-and-appended-again)
 * [Glass shading cost](#glass-shading-cost)
 * [Vulkan frames in flight](#vulkan-frames-in-flight)
 * [SVG to textures](#svg-to-textures)
@@ -210,6 +216,46 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Draw lists recorded and appended again
+
+A widget whose inputs are those of the frame before draws what it drew then. With much content on screen, drawing it
+again - its shapes' tiles looked up, its text's quads copied in, every merge of every primitive - is most of what a frame
+of widgets costs (2026-10-30). The widget layer keeps such drawings (EsiaGUI: `UiDesc::drawMemo`); this is what it
+keeps them with.
+
+### What changed
+
+* `DrawList::BeginRecord` / `EndRecord(DrawRecord&)`: what a stretch of the list added - its vertices, indices (from its
+  first vertex), quads, FX instances and commands (ranges from its starts) - and what it did to the command before it:
+  its primitives may join that command, so the count it added, the bounds of what it added (gathered apart while it
+  records), its texture and kinds after them. A recording that reached into what lay before it is not kept (a `Mark`,
+  moved commands, bounds refreshed there, a clip or texture popped from below its start, a layer, a fade or a callback,
+  `BreakRecording`), nor one that left the clip or texture stacks changed; either way the list is what it would be
+  unrecorded.
+* `CanReplay` / `Replay`: appended where the list's last command is the same but for its ranges (and takes primitives the
+  same way: the same kind, clip, texture, effect, contiguous or not, empty or not), after a `Mark` or not alike, with the
+  same clip and texture in use. The arrays are appended and moved to where they go (indices, command ranges); the command
+  before takes the count and bounds the stretch added to it.
+* `BreakRecording`: what is drawn now depends on more than the drawing's inputs. `svg::Draw` calls it (a drawing is an
+  image the first frame and a tile in the text's pages after).
+* Text: `TextMetrics::layout`, a layout's identity (a serial given whenever a text is laid out; never reused). While
+  `SetDrawNotes` has a list, `Draw` and `DrawOutline` with smooth motion append where they drew (`DrawNote`: the layout,
+  the place, the scale, how much at rest). `ReplayDraws` leaves those records as the draws would - each one the next of
+  its layout this frame, seen where it is, at rest - or changes nothing when one of them would be drawn otherwise (it
+  moved, it is settling, its layout left the cache). `DrawGeneration` changes whenever a text drawn the same way could
+  come out otherwise (pages started over, another rendering, density or fallback fonts). `KeepLayouts`: layouts a caller
+  keeps using without measuring them again stay in the cache's use.
+
+### Verified
+
+* `DrawList.ReplayAppendsWhatDrawingWould`: a recorded stretch replayed after other content (glyphs on its label's page
+  before it: it joins their command; more geometry: its indices move) against drawing it there, every array byte for
+  byte and every command field for field; a recording leaves the list as it is unrecorded.
+  `DrawList.ReplayNeedsTheStateItBeganIn`, `DrawList.RecordingsThatReachBackAreNotKept`.
+* EsiaGUI's draw memos: 440 frames of a panel of labels, buttons, switches, sliders and a paragraph through hovers, clicks,
+  a drag, a style, a theme's transition, a second scale and content moving by fractions of a pixel (smooth motion on and
+  off): the draw data byte for byte what drawing every widget makes, every frame.
 
 ## Glass shading cost
 
