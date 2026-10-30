@@ -566,6 +566,18 @@ namespace esia
         Rect(r, s);
     }
 
+    void Painter::UnscaledImage(TextureId tex, const esia::Rect& r, Color tint, Vec2 uv0, Vec2 uv1)
+    {
+        // drawn as if no scale were pushed (an instance is not scaled, a quad goes where `r` is), and PopScale skips it
+        const int depth = scaleDepth_;
+        const std::size_t start = dl_->Vertices().size(), quadStart = dl_->Quads().size();
+        scaleDepth_ = 0;
+        Image(tex, r, 0.0f, tint, uv0, uv1);
+        scaleDepth_ = depth;
+        if (depth > 0)
+            ExcludeFromScale(start, quadStart);
+    }
+
     // ------------------------------------------------------------ paths
     void Painter::Polygon(const Vec2* points, int count, const Style& s) { EmitPolygon(points, count, nullptr, s.radii[0], s); }
 
@@ -1444,12 +1456,22 @@ namespace esia
 
     void Painter::ExcludeFromScale(std::size_t vtxStart, std::size_t quadStart)
     {
-        if ((dl_->Vertices().size() > vtxStart || dl_->Quads().size() > quadStart) && excludedCount_ < kMaxExcluded)
+        const std::size_t vtxEnd = dl_->Vertices().size(), quadEnd = dl_->Quads().size();
+        if (vtxEnd == vtxStart && quadEnd == quadStart)
+            return;
+        // right after the last range: one range (labels and icons one after another under a scale never run out of them)
+        if (excludedCount_ > 0 && excludedEnd_[excludedCount_ - 1] == vtxStart && excludedQuadEnd_[excludedCount_ - 1] == quadStart)
+        {
+            excludedEnd_[excludedCount_ - 1] = vtxEnd;
+            excludedQuadEnd_[excludedCount_ - 1] = quadEnd;
+            return;
+        }
+        if (excludedCount_ < kMaxExcluded)
         {
             excludedStart_[excludedCount_] = vtxStart;
-            excludedEnd_[excludedCount_] = dl_->Vertices().size();
+            excludedEnd_[excludedCount_] = vtxEnd;
             excludedQuadStart_[excludedCount_] = quadStart;
-            excludedQuadEnd_[excludedCount_] = dl_->Quads().size();
+            excludedQuadEnd_[excludedCount_] = quadEnd;
             ++excludedCount_;
         }
     }
@@ -1984,6 +2006,22 @@ namespace esia
         }
         if (scaleDepth_ == 0)
             excludedCount_ = 0;
+    }
+
+    Vec2 Painter::Scaled(Vec2 p) const
+    {
+        for (int i = scaleDepth_ - 1; i >= 0; --i)
+            if (scaleValue_[i] != 1.0f)
+                p = ScalePoint(p, scaleOrigin_[i], scaleValue_[i]);
+        return p;
+    }
+
+    float Painter::ScaleFactor() const
+    {
+        float k = 1.0f;
+        for (int i = scaleDepth_ - 1; i >= 0; --i)
+            k *= scaleValue_[i];
+        return k;
     }
 
     void Painter::BeginGlowLayer(Color tint, float radius, float intensity, float contentOpacity)

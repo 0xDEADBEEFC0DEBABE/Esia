@@ -224,6 +224,54 @@ ESIA_TEST(Painter, TextUnderScaleIsRasterizedScaledNotStretched)
     ESIA_CHECK(text.lastScale == 16.0f);
 }
 
+ESIA_TEST(Painter, UnscaledImagesStayWhereTheScalePutThem)
+{
+    DrawList dl = MakeList();
+    Painter p(dl, Fx());
+    ESIA_CHECK(p.Scaled(Vec2(30, 30)) == Vec2(30, 30) && p.ScaleFactor() == 1.0f);
+    p.PushScale(Vec2(10, 10), 2.0f);
+    p.PushScale(Vec2(20, 20), 0.5f);
+    // the inner scale first, then the outer: 30 -> 25 -> 40
+    ESIA_CHECK(p.Scaled(Vec2(30, 30)) == Vec2(40, 40) && p.ScaleFactor() == 1.0f);
+    p.PopScale();
+    ESIA_CHECK(p.Scaled(Vec2(30, 30)) == Vec2(50, 50) && p.ScaleFactor() == 2.0f);
+    // a hundred images at their final place, a rectangle of geometry after every 25: PopScale scales the rectangles
+    // and leaves the images (more of them than the ranges it can skip one by one: images in a row are one range)
+    for (int i = 0; i < 100; ++i)
+    {
+        p.UnscaledImage(7, Rect((float)i * 4.0f, 0.0f, (float)i * 4.0f + 2.0f, 2.0f));
+        if (i % 25 == 24)
+            dl.AddRectFilled(Rect(1, 1, 2, 2), 0xFFFFFFFFu);
+    }
+    p.PopScale();
+    const auto& vtx = dl.Vertices();
+    ESIA_CHECK(vtx.size() == 4 * 100 + 4 * 4);
+    bool placed = vtx.size() == 4 * 100 + 4 * 4;
+    std::size_t v = 0;
+    for (int i = 0; i < 100 && placed; ++i)
+    {
+        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+        for (int k = 0; k < 4; ++k, ++v)
+            x0 = std::min(x0, vtx[v].pos.x), y0 = std::min(y0, vtx[v].pos.y), x1 = std::max(x1, vtx[v].pos.x), y1 = std::max(y1, vtx[v].pos.y);
+        placed = x0 == (float)i * 4.0f && x1 == (float)i * 4.0f + 2.0f && y0 == 0.0f && y1 == 2.0f;
+        if (i % 25 == 24)
+        {
+            // (1, 1) - (2, 2) twice as far from (10, 10): (-8, -8) - (-6, -6)
+            placed = placed && vtx[v].pos == Vec2(-8, -8) && vtx[v + 2].pos == Vec2(-6, -6);
+            v += 4;
+        }
+    }
+    ESIA_CHECK(placed);
+    // under a mask: an FX instance at `r`, not scaled
+    p.PushMask(Rect(0, 0, 100, 100), 4);
+    p.PushScale(Vec2(0, 0), 2.0f);
+    p.UnscaledImage(7, Rect(10, 10, 20, 20));
+    p.PopScale();
+    p.PopMask();
+    const fx::Instance& i = dl.FxInstances().back();
+    ESIA_CHECK((i.flags[0] & fx::kMask) && (i.flags[0] & fx::kImage) && i.rect[0] == 10 && i.rect[1] == 10 && i.rect[2] == 20 && i.rect[3] == 20);
+}
+
 ESIA_TEST(Painter, TextOutlinesGoUnderTheirTextAndIcons)
 {
     DrawList dl = MakeList();

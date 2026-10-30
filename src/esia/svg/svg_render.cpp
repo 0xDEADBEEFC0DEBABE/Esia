@@ -333,12 +333,46 @@ namespace esia::svg::detail
             }
         }
 
+        // The part of a closed contour on one side of the line x = v (axis 0) or y = v (axis 1) - the side `keep` points to
+        // (1: greater, -1: less) - by Sutherland-Hodgman: what lies beyond becomes a run along the line, so every point
+        // on the kept side keeps its winding, and the coverage there is the contour's.
+        void ClipSide(const std::vector<Vec2>& in, int axis, float v, float keep, std::vector<Vec2>& out)
+        {
+            out.clear();
+            const std::size_t n = in.size();
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const Vec2 p = in[i], q = in[i + 1 < n ? i + 1 : 0];
+                const float dp = ((axis ? p.y : p.x) - v) * keep, dq = ((axis ? q.y : q.x) - v) * keep;
+                if (dp >= 0.0f)
+                    out.push_back(p);
+                if ((dp >= 0.0f) != (dq >= 0.0f))
+                {
+                    const float t = dp / (dp - dq);
+                    Vec2 c(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t);
+                    (axis ? c.y : c.x) = v;
+                    out.push_back(c);
+                }
+            }
+        }
+
         class Renderer
         {
         public:
             Renderer(const Tree& tree, int width, int height, const RasterOptions& o) : t_(tree), w_(width), h_(height), o_(o)
             {
-                view_ = ViewTransform(tree, (float)width, (float)height);
+                const Rect& vp = o.viewport;
+                if (vp.Empty())
+                    view_ = ViewTransform(tree, (float)width, (float)height);
+                else
+                {
+                    // fitted into the viewport; what reaches beyond the sides of it that are inside the image is cut off
+                    // there (the image's own edges cut the rest)
+                    view_ = Affine::Translate(vp.min.x, vp.min.y) * ViewTransform(tree, vp.Width(), vp.Height());
+                    box_ = vp;
+                    sides_ = (vp.min.x > 0.0f ? 1u : 0u) | (vp.max.x < (float)width ? 2u : 0u) | (vp.min.y > 0.0f ? 4u : 0u) |
+                             (vp.max.y < (float)height ? 8u : 0u);
+                }
                 current_ = o.mask ? Color(1.0f, 1.0f, 1.0f, o.currentColor.a) : o.currentColor;
             }
 
@@ -347,6 +381,7 @@ namespace esia::svg::detail
         private:
             PaintJob PreparePaint(const Paint& p, float opacity, const Shape& sh) const;
             void Prepare(std::uint32_t shape);
+            void CutToViewport(Contours& c);
             ClipJob& PrepareClip(int index);
             const float* ClipRow(int index, int y);
             void DrawShape(ShapeJob& job, Px* row, int y);
@@ -355,15 +390,66 @@ namespace esia::svg::detail
             int w_, h_;
             const RasterOptions& o_;
             Affine view_;
+            Rect box_;                 // the viewport
+            std::uint32_t sides_ = 0;  // its sides inside the image: 1 left, 2 right, 4 top, 8 bottom
             Color current_;
             std::vector<ShapeJob> shapes_;
             std::vector<ClipJob> clips_;
-            Contours contours_;
+            Contours contours_, clipped_;
+            std::vector<Vec2> sideA_, sideB_;
             Cells cells_;
             std::vector<Cells::Span> spans_;
             std::vector<float> cov_;
             std::vector<Px> scratch_;
         };
+
+        // `c` (pixels) within the viewport's sides inside the image: contours inside them as they are, those beyond one
+        // left out, the rest cut at them
+        void Renderer::CutToViewport(Contours& c)
+        {
+            clipped_.Clear();
+            const std::size_t count = c.starts.size();
+            for (std::size_t k = 0; k < count; ++k)
+            {
+                const std::size_t s = c.starts[k], e = k + 1 < count ? c.starts[k + 1] : c.pts.size();
+                float x0 = std::numeric_limits<float>::max(), y0 = x0, x1 = -x0, y1 = -x0;
+                for (std::size_t i = s; i < e; ++i)
+                {
+                    const Vec2 p = c.pts[i];
+                    x0 = std::min(x0, p.x), y0 = std::min(y0, p.y), x1 = std::max(x1, p.x), y1 = std::max(y1, p.y);
+                }
+                if (((sides_ & 1) && x1 <= box_.min.x) || ((sides_ & 2) && x0 >= box_.max.x) || ((sides_ & 4) && y1 <= box_.min.y) ||
+                    ((sides_ & 8) && y0 >= box_.max.y))
+                    continue;
+                const bool within = (!(sides_ & 1) || x0 >= box_.min.x) && (!(sides_ & 2) || x1 <= box_.max.x) &&
+                                    (!(sides_ & 4) || y0 >= box_.min.y) && (!(sides_ & 8) || y1 <= box_.max.y);
+                if (within)
+                {
+                    clipped_.Begin(c.groups[k]);
+                    clipped_.pts.insert(clipped_.pts.end(), c.pts.begin() + (std::ptrdiff_t)s, c.pts.begin() + (std::ptrdiff_t)e);
+                    continue;
+                }
+                sideA_.assign(c.pts.begin() + (std::ptrdiff_t)s, c.pts.begin() + (std::ptrdiff_t)e);
+                const struct
+                {
+                    std::uint32_t side;
+                    int axis;
+                    float v, keep;
+                } cuts[4] = {{1u, 0, box_.min.x, 1.0f}, {2u, 0, box_.max.x, -1.0f}, {4u, 1, box_.min.y, 1.0f}, {8u, 1, box_.max.y, -1.0f}};
+                for (const auto& cut : cuts)
+                    if ((sides_ & cut.side) && sideA_.size() >= 3)
+                    {
+                        ClipSide(sideA_, cut.axis, cut.v, cut.keep, sideB_);
+                        sideA_.swap(sideB_);
+                    }
+                if (sideA_.size() >= 3)
+                {
+                    clipped_.Begin(c.groups[k]);
+                    clipped_.pts.insert(clipped_.pts.end(), sideA_.begin(), sideA_.end());
+                }
+            }
+            std::swap(c, clipped_);
+        }
 
         PaintJob Renderer::PreparePaint(const Paint& p, float opacity, const Shape& sh) const
         {
@@ -527,6 +613,8 @@ namespace esia::svg::detail
             {
                 contours_.Clear();
                 FlattenFill(path, m, kTolerance, 0, contours_);
+                if (sides_)
+                    CutToViewport(contours_);
                 const std::uint8_t eo = sh.evenOdd ? 1 : 0;
                 job.fill.Build(contours_, &eo, 1, w_, h_);
                 job.hasFill = !job.fill.Empty();
@@ -537,6 +625,8 @@ namespace esia::svg::detail
             {
                 contours_.Clear();
                 StrokeOutline(path, t_.strokes[(std::size_t)sh.strokeStyle], m, kTolerance, 0, contours_);
+                if (sides_)
+                    CutToViewport(contours_);
                 const std::uint8_t nz = 0;
                 job.stroke.Build(contours_, &nz, 1, w_, h_);
                 job.hasStroke = !job.stroke.Empty();

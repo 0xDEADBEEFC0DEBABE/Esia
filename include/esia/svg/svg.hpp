@@ -17,11 +17,13 @@
 // where a stroke's pieces meet too: the sweep finds the outline of their union, nothing is approximated per pixel.
 // Curves are flattened within 1/32 pixel; colors are composited the way browsers composite SVG (premultiplied, in sRGB).
 #pragma once
+#include "esia/base/hash.hpp"
 #include "esia/base/math.hpp"
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace esia
@@ -33,6 +35,7 @@ namespace esia
 namespace esia::text
 {
     class GlyphAtlas;
+    struct GlyphSlot;
 }
 
 namespace esia::svg
@@ -73,6 +76,9 @@ namespace esia::svg
         Color currentColor = Color::Black();   // what currentColor paints (straight alpha)
         bool mask = false;   // the drawing's alpha only, in white pixels (tinted when drawn): an icon in any color
         int border = 0;      // transparent texels around the drawing, colored like the texels next to them
+        // Where the drawing goes, in pixels from the top-left corner of the width x height (inside the border): any
+        // fraction of a pixel, nothing drawn outside it. Empty: all of width x height.
+        Rect viewport;
     };
 
     // RGBA8 pixels: straight alpha, sRGB (TextureFormat::RGBA8), rows top first. Fully transparent texels next to the
@@ -84,12 +90,19 @@ namespace esia::svg
     };
 
     // `doc` in width x height pixels (and RasterOptions::border more on every side): its viewBox fitted by its
-    // preserveAspectRatio. false: an empty document, or a size of 0 or beyond 16384.
+    // preserveAspectRatio into RasterOptions::viewport, or into all of them. false: an empty document, a size of 0 or
+    // beyond 16384, or a viewport that is not finite.
     ESIA_API bool Rasterize(const Document& doc, int width, int height, const RasterOptions& options, Image& out);
 
-    // Rasterized documents in RGBA8 pages of the TextureRegistry, cached by document, size, mode and (where it paints
-    // something) currentColor. Pages are packed and recycled as text::GlyphAtlas's: when `maxPages` are full the frame
-    // still gets more, and the next BeginFrame starts over. One per UI thread.
+    // Rasterized documents in RGBA8 textures of the TextureRegistry, cached by document, size, viewport, mode and (where
+    // it paints something) currentColor.
+    // A new drawing goes into the recent pages, and into the lasting ones when the next frame draws it too: the sizes and
+    // places of an animation stay among the recent (drawn again when an animation comes back to them), and filling
+    // those never makes what stays on screen be rasterized again. Each set has up to `maxPages` pages, made as they are
+    // needed, recycled as text::GlyphAtlas's - when they are full the frame still gets more, and the next BeginFrame
+    // starts over: the lasting pages only when what is drawn frame after frame no longer fits in them, the recent ones
+    // whenever animations fill them. A drawing larger than a page gets a texture of its own, kept while it is drawn.
+    // One per UI thread.
     class ESIA_API Atlas
     {
     public:
@@ -106,24 +119,42 @@ namespace esia::svg
             TextureId texture = 0;
             Vec2 uv0, uv1;   // the drawing's width x height texels
         };
-        // `doc` at width x height pixels: from the cache, or rasterized now. Null for an empty document or one larger
-        // than a page.
+        // `doc` at width x height pixels: from the cache, or rasterized now. Null for an empty document or what
+        // Rasterize refuses. Valid until the next Get.
         const Entry* Get(const Document& doc, int width, int height, const RasterOptions& options = {});
 
         int Rasterized() const { return rasterized_; }   // how many times Get rasterized (the rest came from the cache)
 
     private:
-        std::unique_ptr<text::GlyphAtlas> pages_;
+        struct Own   // a drawing larger than a page
+        {
+            TextureId texture = 0;
+            int width = 0, height = 0;   // with the border
+            std::uint64_t frame = 0;     // the last frame it was drawn in
+        };
+
+        // a key the lasting pages do not have: from the last frame's pixels, the recent pages or rasterized now
+        const Entry* Make(const Document& doc, int width, int height, const RasterOptions& options, std::uint64_t key);
+        const Entry* Placed(const text::GlyphSlot& slot);
+        void Recycle(Image& img);
+
+        TextureRegistry& textures_;
+        std::unique_ptr<text::GlyphAtlas> lasting_, recent_;   // drawings drawn frame after frame; the others
+        std::unordered_map<std::uint64_t, Image, IntHash> made_, madeBefore_;   // the pixels of this / the last frame's new ones
+        std::vector<std::vector<std::uint8_t>> spare_;   // pixel buffers to rasterize into again
+        std::unordered_map<std::uint64_t, Own, IntHash> own_;
         int pageSize_ = 0;
         int rasterized_ = 0;
+        std::uint64_t frame_ = 0;
         Entry entry_;
-        Image scratch_;
     };
 
-    // Draws `doc` into `r` (UI units) on the painter's pixel grid: `r` rounded to whole physical pixels, the drawing
-    // rasterized at that size (once: `atlas` keeps it) and drawn as an image. `color` is currentColor, and its alpha
-    // fades the whole drawing. A monochrome document (Document::Monochrome), or any with `mask`, is rasterized once as a
-    // mask and drawn in `color`.
+    // Draws `doc` into `r` (UI units): the drawing rasterized at the size it is drawn (once: `atlas` keeps it) and drawn
+    // as an image, its texels on the target's pixels. Outside a scale, `r` is rounded to whole physical pixels. Under
+    // Painter::PushScale, the drawing goes exactly where the scale puts it (to 1/64 pixel), rasterized there - every
+    // frame of a scale animation has the pixels of its own geometry, never a stretched image. `color` is currentColor,
+    // and its alpha fades the whole drawing. A monochrome document (Document::Monochrome), or any with `mask`, is
+    // rasterized once as a mask and drawn in `color`.
     ESIA_API void Draw(Painter& painter, Atlas& atlas, const Document& doc, const Rect& r, Color color = Color::Black(),
                        bool mask = false);
 }

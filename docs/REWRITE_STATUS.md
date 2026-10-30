@@ -203,11 +203,19 @@ Painter::Image draws (2026-10-30): `include/esia/svg/svg.hpp`, the library `esia
   patterns.
 * `svg::Rasterize`: RGBA8, straight alpha in sRGB (the texture format of images); transparent texels next to the drawing
   take its colors, so bilinear filtering does not darken its edges. `RasterOptions::mask`: the alpha alone, in white,
-  tinted when drawn.
+  tinted when drawn. `RasterOptions::viewport`: the drawing fitted into any rectangle of the image, to fractions of a
+  pixel, cut exactly at its sides.
 * `svg::Atlas`: rasterized documents packed into RGBA8 pages (text::GlyphAtlas's packing and frame rules), keyed by
-  document, size, mode and - where it paints something - currentColor. `svg::Draw` rasterizes at the drawn rectangle's
-  size in physical pixels and draws it on the pixel grid, texels on pixels one to one; a monochrome document (every paint
-  currentColor) is rasterized once, as a mask, and drawn in any color.
+  document, size, viewport, mode and - where it paints something - currentColor. A new drawing goes into the recent
+  pages and moves into the lasting ones when the next frame draws it too (from the pixels it was made with): the sizes
+  an animation passes through stay among the recent pages, found again when it comes back to them, and filling those
+  never makes what stays on screen be rasterized again. A drawing larger than a page gets a texture of its own while it
+  is drawn.
+* `svg::Draw` rasterizes at the size the drawing has on the target and draws it with its texels on pixels one to one:
+  outside a scale on the rectangle rounded to whole physical pixels; under `Painter::PushScale` exactly where the scale
+  puts it (to 1/64 pixel), rasterized there - as text is under a scale - so every frame of a scale animation has the
+  pixels of its own geometry. A monochrome document (every paint currentColor) is rasterized once, as a mask, and drawn
+  in any color.
 
 ### Quality
 
@@ -226,11 +234,19 @@ Painter::Image draws (2026-10-30): `include/esia/svg/svg.hpp`, the library `esia
 
 ### Verified
 
-* `esia_svg_tests` (24): the parser and CSS; coverage against dense point sampling (64 x 64 points a pixel) for
+* `esia_svg_tests` (29): the parser and CSS; coverage against dense point sampling (64 x 64 points a pixel) for
   overlapping squares, a pentagram and a bow tie under both rules and unions of groups with their own rules (within
   0.002); round strokes against "every point within half the width of the path" (within 0.008); strokes wider than their
   outline's curves (a disc, a ring, folded corners); dashes as SVG 2 places them; gradients, layers, clips, masks, the
-  texels around the drawing, the atlas's cache, Draw on the pixel grid.
+  texels around the drawing, the atlas's cache, Draw on the pixel grid; a viewport at quarter and half pixels against
+  the area of its box in every pixel, also for a square and a stroke reaching far beyond it (within half a level); Draw
+  under scales of 1.5 and 1.25; a drawing that stays beside one at a new size every frame (rasterized once); drawings
+  larger than a page. `esia_render_tests`: Painter::Scaled, ScaleFactor and UnscaledImage (a hundred images under one
+  scale, with geometry between them and under a mask).
+* Under a scale on a GPU: an icon drawn at scales 1.37, 1.5 and 2.25 on D3D9, D3D10, D3D11, D3D12, OpenGL and Vulkan
+  (RTX 4080) has the pixels of svg::Rasterize of the same geometry on the CPU, within half a level (the rounding of
+  the blend), and nothing around it. Drawn the first version's way - rasterized at its size in the layout and stretched
+  by the scale - not one of its pixels reached full ink at those scales.
 * Against Chrome, its rendering of the same files at the same size compared pixel by pixel in the page: 158 renderings
   of 80 files - the 63 SVG icons that come with Visual Studio, 16 feature files, two logos - at 16 to 128 pixels. Mean
   alpha difference 2.8 levels, along edges: Chrome's antialiasing there has 8 levels of coverage (multiples of 32) where
@@ -254,11 +270,38 @@ At 512 x 512: an empty drawing 0.13 ms, a full opaque rectangle 0.42 ms, a full 
 than its small circle 0.26 ms (8.7 ms as overlapping pieces). Only the drawing's rows and columns are visited; rows turn
 into RGBA8 with SSE2 or NEON (a plain loop elsewhere); a group's layer only where it needs one.
 
+The atlas over 600 frames: 80 icons that stay (40 documents at 24 and 48 pixels) and icons whose size changes every
+frame in one-second cycles, the first version's atlas (one set of pages) against the recent and lasting pages, runs
+taken in turn, the cost of the frame's lookups and rasterizations:
+
+| | first version: mean / p99 / max | now: mean / p99 / max | icons that stay, rasterized again |
+| --- | --- | --- | --- |
+| 4 animated, 24 to 96 px | 7.4 / 155 / 165 us | 6.6 / 132 / 153 us | 0 / 0 |
+| 20 animated, 24 to 120 px | 746 / 3290 / 3400 us | 576 / 930 / 1310 us | 1520 times in 19 frames / 0 |
+
+With 20 animations the first version's pages filled 19 times, and each time the next frame rasterized the 80 icons that
+stay as well. A lookup that finds its drawing costs what it did (6.3 to 6.8 ns in both).
+
+### Fixed after the first version
+
+* Under `Painter::PushScale` a drawing was rasterized at its size in the layout and the image stretched by the scale:
+  soft at every scale but 1. It is now rasterized where the scale puts it. Painter has what that needs: `Scaled` and
+  `ScaleFactor` (where the scales pushed put a point, how much they scale lengths) and `UnscaledImage` (an image already
+  at its final place, which PopScale leaves alone); and PopScale's list of what it leaves alone joins ranges that follow
+  one another, so labels and icons drawn one after another under a scale take one entry (it holds 64; past them, what
+  came after was scaled twice).
+* Drawings at new sizes every frame filled the one set of pages, and each time it started over, everything on screen was
+  rasterized again: recent and lasting pages now.
+* A drawing larger than an atlas page was not drawn at all (at the default 1024, anything over 1021 pixels - 510 UI
+  units at a pixel scale of 2): a texture of its own now.
+
 ### Not done
 
 * Text, `<image>`, filters, masks, markers, patterns, `vector-effect`.
 * A stroke wider than a tight curve of an open path stays a set of overlapping pieces: exact, slower at large sizes.
 * A row crossed thousands of times: past 256 cuts it goes in strips of 1/32 pixel (coverage within about 1/64 there).
+* A large drawing is rasterized whole on the thread that draws it, also the parts outside the target (0.4 to 1 ms at
+  512 x 512).
 
 ## Polylines on the processor's vectors
 

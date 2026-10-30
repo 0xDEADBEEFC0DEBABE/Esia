@@ -500,3 +500,140 @@ ESIA_TEST(SvgAtlas, DrawOnThePixelGrid)
     Draw(p, atlas, mono, Rect(40.0f, 20.0f, 52.0f, 32.0f), Color(0.0f, 0.5f, 1.0f));
     ESIA_CHECK(atlas.Rasterized() == 1 && dl.Vertices().size() == 8);
 }
+
+ESIA_TEST(SvgCoverage, ViewportAtFractionsOfAPixel)
+{
+    // fitted into (0.25, 0.5) - (10.25, 10.5) of 12 x 12 pixels, a square filling its viewBox covers in every pixel the
+    // area of that box in it; so do a square reaching far beyond its viewBox and a stroke wider than all of it: cut off
+    // at the viewport's sides exactly
+    RasterOptions o;
+    o.viewport = Rect(0.25f, 0.5f, 10.25f, 10.5f);
+    for (const char* svg : {"<svg viewBox='0 0 10 10'><rect width='10' height='10'/></svg>",
+                            "<svg viewBox='0 0 10 10'><rect x='-5' y='-5' width='20' height='20'/></svg>",
+                            "<svg viewBox='0 0 10 10'><path d='M0 0h10v10H0z' fill='none' stroke='#000' stroke-width='30'/></svg>"})
+    {
+        const Image img = Raster(svg, 12, 12, o);
+        float worst = 0.0f;
+        for (int y = 0; y < 12; ++y)
+            for (int x = 0; x < 12; ++x)
+                worst = std::max(worst, std::fabs((float)Px(img, x, y)[3] / 255.0f - BoxIn(0.25f, 0.5f, 10.25f, 10.5f, x, y)));
+        ESIA_CHECK(worst <= 0.6f / 255.0f);
+    }
+    // a wide viewport: the square viewBox in its middle (xMidYMid meet), 10 x 10 from x = 5.5
+    o.viewport = Rect(0.5f, 0.5f, 20.5f, 10.5f);
+    const Image wide = Raster("<svg viewBox='0 0 10 10'><rect width='10' height='10'/></svg>", 22, 12, o);
+    float worst = 0.0f;
+    for (int y = 0; y < 12; ++y)
+        for (int x = 0; x < 22; ++x)
+            worst = std::max(worst, std::fabs((float)Px(wide, x, y)[3] / 255.0f - BoxIn(5.5f, 0.5f, 15.5f, 10.5f, x, y)));
+    ESIA_CHECK(worst <= 0.6f / 255.0f);
+    // the whole image as the viewport: the same pixels as none
+    o.viewport = Rect(0.0f, 0.0f, 12.0f, 12.0f);
+    const char* circle = "<svg viewBox='0 0 10 10'><circle cx='5' cy='5' r='4.3' fill='#08f' stroke='#f80'/></svg>";
+    ESIA_CHECK(Raster(circle, 12, 12, o).pixels == Raster(circle, 12, 12).pixels);
+    o.viewport = Rect(0.0f, 0.0f, std::nanf(""), 12.0f);
+    Image img;
+    ESIA_CHECK(!Rasterize(Document::Parse(circle), 12, 12, o, img));
+}
+
+ESIA_TEST(SvgAtlas, DrawnWhereTheScalePutsIt)
+{
+    TextureRegistry textures;
+    Atlas atlas(textures);
+    DrawList dl;
+    dl.Reset(Rect(0, 0, 400, 300));
+    Painter p(dl, PainterEnv());
+    const Document mono = Document::Parse("<svg viewBox='0 0 24 24'><path d='M4 4h16v16H4z' fill='currentColor'/></svg>");
+    RasterOptions m;
+    m.mask = true;
+    m.currentColor = Color::White();
+    const auto bounds = [&](std::size_t first) {
+        Rect b(1e9f, 1e9f, -1e9f, -1e9f);
+        for (std::size_t i = first; i < dl.Vertices().size(); ++i)
+            b = Rect(std::min(b.min.x, dl.Vertices()[i].pos.x), std::min(b.min.y, dl.Vertices()[i].pos.y), std::max(b.max.x, dl.Vertices()[i].pos.x),
+                     std::max(b.max.y, dl.Vertices()[i].pos.y));
+        return b;
+    };
+    atlas.BeginFrame();
+    // 1.5 times around (0, 0): (10, 10) - (34, 34) goes to (15, 15) - (51, 51), whole pixels - rasterized at 36 x 36
+    // there, and PopScale leaves the image where it is
+    p.PushScale(Vec2(0, 0), 1.5f);
+    Draw(p, atlas, mono, Rect(10, 10, 34, 34), Color::White());
+    p.PopScale();
+    ESIA_CHECK(atlas.Rasterized() == 1 && bounds(0) == Rect(15, 15, 51, 51));
+    ESIA_CHECK(atlas.Get(mono, 36, 36, m) && atlas.Rasterized() == 1);
+    // 1.25 times: (12.5, 12.5) - (42.5, 42.5) - the drawing at those fractions, in pixels (12, 12) - (43, 43)
+    p.PushScale(Vec2(0, 0), 1.25f);
+    Draw(p, atlas, mono, Rect(10, 10, 34, 34), Color::White());
+    p.PopScale();
+    ESIA_CHECK(atlas.Rasterized() == 2 && bounds(4) == Rect(12, 12, 43, 43));
+    m.viewport = Rect(0.5f, 0.5f, 30.5f, 30.5f);
+    ESIA_CHECK(atlas.Get(mono, 31, 31, m) && atlas.Rasterized() == 2);
+    // the next frame at the same scale: from the cache
+    atlas.BeginFrame();
+    p.PushScale(Vec2(0, 0), 1.25f);
+    Draw(p, atlas, mono, Rect(10, 10, 34, 34), Color::White());
+    p.PopScale();
+    ESIA_CHECK(atlas.Rasterized() == 2 && bounds(8) == Rect(12, 12, 43, 43));
+    // a scale of 1 is no scale: whole pixels
+    p.PushScale(Vec2(5, 5), 1.0f);
+    Draw(p, atlas, mono, Rect(10.3f, 10.0f, 34.3f, 34.0f), Color::White());
+    p.PopScale();
+    ESIA_CHECK(atlas.Rasterized() == 3 && bounds(12) == Rect(10, 10, 34, 34));
+}
+
+ESIA_TEST(SvgAtlas, AnimatedSizesLeaveTheLastingPagesAlone)
+{
+    // small pages; a drawing at a new size every frame (20 to 99 pixels: the recent pages fill and start over again and
+    // again) beside one that stays: the one that stays is rasterized once
+    TextureRegistry textures;
+    Atlas atlas(textures, 128, 1);
+    const Document still = Document::Parse("<svg viewBox='0 0 24 24'><path d='M4 4h16v16H4z' fill='#08f'/></svg>");
+    const Document moving = Document::Parse("<svg viewBox='0 0 24 24'><circle cx='12' cy='12' r='10' fill='#f80'/></svg>");
+    bool drawn = true;
+    int stillAgain = 0;
+    for (int frame = 0; frame < 200; ++frame)
+    {
+        atlas.BeginFrame();
+        const int before = atlas.Rasterized();
+        drawn = drawn && atlas.Get(still, 32, 32);
+        if (frame > 0)
+            stillAgain += atlas.Rasterized() - before;
+        const int size = 20 + frame % 80;
+        drawn = drawn && atlas.Get(moving, size, size) && atlas.Get(still, 32, 32);
+    }
+    ESIA_CHECK(drawn && stillAgain == 0);
+    // an animation that comes back to the same sizes finds them among the recent drawings
+    Atlas big(textures);
+    for (int frame = 0; frame < 40; ++frame)
+    {
+        big.BeginFrame();
+        ESIA_CHECK(big.Get(moving, 24 + frame % 4 * 8, 24 + frame % 4 * 8));
+    }
+    ESIA_CHECK(big.Rasterized() == 4);
+}
+
+ESIA_TEST(SvgAtlas, LargerThanAPage)
+{
+    TextureRegistry textures;
+    Atlas atlas(textures, 64, 1);
+    const Document doc = Document::Parse("<svg viewBox='0 0 24 24'><path d='M4 4h16v16H4z' fill='#08f'/></svg>");
+    atlas.BeginFrame();
+    const Atlas::Entry* e = atlas.Get(doc, 200, 100);
+    ESIA_CHECK(e != nullptr);
+    if (!e)
+        return;
+    // a texture of its own, the drawing inside its border
+    const TextureId texture = e->texture;
+    TextureInfo info;
+    ESIA_CHECK(textures.Info(texture, info) && info.width == 202 && info.height == 102 && info.format == TextureFormat::RGBA8);
+    ESIA_CHECK(std::fabs(e->uv0.x - 1.0f / 202.0f) < 1e-6f && std::fabs(e->uv1.y - 101.0f / 102.0f) < 1e-6f);
+    // kept while it is drawn, gone once a frame did not draw it
+    atlas.BeginFrame();
+    e = atlas.Get(doc, 200, 100);
+    ESIA_CHECK(e && e->texture == texture && atlas.Rasterized() == 1);
+    atlas.BeginFrame();
+    ESIA_CHECK(textures.Info(texture, info));
+    atlas.BeginFrame();
+    ESIA_CHECK(!textures.Info(texture, info));
+}

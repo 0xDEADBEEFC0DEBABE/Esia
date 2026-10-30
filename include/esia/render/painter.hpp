@@ -221,6 +221,9 @@ namespace esia
         void Merge(const esia::Rect& a, const esia::Rect& b, float radius, float smoothness, const Style& s);
         // Rounded image (SDF-masked, anti-aliased).
         void Image(TextureId tex, const esia::Rect& r, float radius, Color tint = Color::White(), Vec2 uv0 = Vec2(0, 0), Vec2 uv1 = Vec2(1, 1));
+        // An image already where the scales put it: `r` is final (see Scaled), and no scale moves or resizes it again -
+        // for a texture rasterized at the size it is drawn, as text is under PushScale (svg::Draw). Square corners.
+        void UnscaledImage(TextureId tex, const esia::Rect& r, Color tint = Color::White(), Vec2 uv0 = Vec2(0, 0), Vec2 uv1 = Vec2(1, 1));
 
         // ---------------------------------------------------------- paths: any outline, every material
         // A polygon through `points`: any simple outline (convex or not, either winding), with everything a rounded
@@ -293,6 +296,10 @@ namespace esia
         // Uniform scale around `origin` applied to shapes and text emitted until PopScale().
         void PushScale(Vec2 origin, float scale);
         void PopScale();
+        // Where the scales pushed now put what is drawn: the point `p` at Scaled(p), lengths ScaleFactor() times theirs
+        // (p and 1 outside PushScale).
+        Vec2 Scaled(Vec2 p) const;
+        float ScaleFactor() const;
         void SetAlpha(float a) { alpha_ = a; }
         float Alpha() const { return alpha_; }
 

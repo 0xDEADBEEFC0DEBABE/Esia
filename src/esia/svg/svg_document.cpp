@@ -1941,9 +1941,13 @@ namespace esia::svg
 
     bool Rasterize(const Document& doc, int width, int height, const RasterOptions& options, Image& out)
     {
-        out = Image();
+        out.width = out.height = 0;
+        out.pixels.clear();   // its memory is used again
         const detail::Tree* t = doc.Data();
         if (!t || width <= 0 || height <= 0 || width > 16384 || height > 16384 || options.border < 0 || options.border > 256)
+            return false;
+        const Rect& vp = options.viewport;
+        if (!std::isfinite(vp.min.x) || !std::isfinite(vp.min.y) || !std::isfinite(vp.max.x) || !std::isfinite(vp.max.y))
             return false;
         return detail::Render(*t, width, height, options, out);
     }
