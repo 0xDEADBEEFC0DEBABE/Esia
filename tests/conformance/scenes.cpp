@@ -1264,6 +1264,9 @@ namespace esia::conformance
                                                  "nearest edge among hundreds",
                                    &PathLines);
             pathLines.tolerance = glassTolerance;
+            // the figure crossing itself bends a stripe's sharp edge: where two of its edges lie as near, a rasterizer's
+            // rounding takes the other's normal for a few pixels on that edge (llvmpipe 61, WARP 74, Apple's 51)
+            pathLines.tolerance.maxDelta = 80;
             Scene& pathStrokes = add("path_strokes", "strokes crossing as one shape (Painter::Polylines): a t, an x, a loop through a line, "
                                                      "three strokes through a point, a dot, a lattice over many data instances - glass, "
                                                      "glow, a fill with a shadow - one surface where they cross",
@@ -1279,6 +1282,7 @@ namespace esia::conformance
                                       &PathLines);
             pathLineRows.golden = "path_lines";
             pathLineRows.tolerance = glassTolerance;
+            pathLineRows.tolerance.maxDelta = 80;
             pathLineRows.fxInstancesPerRow = 2;
             Scene& reused = add("glass_reused", "the glass scene three times with RenderParams::targetStatic: the third frame's captures come from the "
                                                 "pyramid or from the copies kept aside (temporal reuse), with the same pixels",
