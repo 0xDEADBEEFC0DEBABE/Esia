@@ -262,8 +262,9 @@ never blurs. Glass blurs only what lies behind it (2026-11-03).
 * Byte for byte: the existing scenes on Direct3D 9, 10, 11, 12, OpenGL and Vulkan (245 images) against the build
   before. New scenes `blur_layer` (no blur to a wide one, a faded one, dark and light), `blur_layer_clip` (a clip, a
   rounded mask, a scale, a scrolled view's rows under an edge fade, blurred text over glass) and `blur_layer_zero` (next
-  to no blur in a layer: within 1/255 of `blur_layer_plain`, the same content drawn plainly). Goldens from Direct3D 11;
-  the four Direct3D backends within 1/255 of each other, OpenGL and Vulkan within 3/255.
+  to no blur in a layer: within 1/255 of `blur_layer_plain`, the same content drawn plainly, on GPUs; 2/255 on
+  llvmpipe and lavapipe, whose 8-bit blending rounds a few pixels further). Goldens from Direct3D 11; the four
+  Direct3D backends within 1/255 of each other, OpenGL and Vulkan within 3/255.
 * `Painter.BlurLayers`, `FramePlan.BlurLayersReachTheirGaussianInsideTheirClip`, `Renderer.BlurLayer` (the fallback
   included). MSVC `/W4 /WX`, the GNU flags on the changed files.
 

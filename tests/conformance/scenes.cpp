@@ -1288,11 +1288,12 @@ namespace esia::conformance
                 &BlurLayersClipped)
                 .tolerance = glassTolerance;
             add("blur_layer_plain", "what blur_layer_zero draws in a layer, drawn plainly: overlapping translucent shapes, text", &BlurLayerPlain);
-            Scene& blurZero = add("blur_layer_zero", "a blur layer of next to no blur: the content's own pixels (within 1/255 of blur_layer_plain)",
+            // within 1/255 on GPUs (Direct3D 9 - 12, OpenGL, Vulkan on an RTX 4080 SUPER); llvmpipe's and lavapipe's 8-bit
+            // blending rounds a few pixels to 2/255: the default sameTolerance
+            Scene& blurZero = add("blur_layer_zero", "a blur layer of next to no blur: the content's own pixels (within 2/255 of blur_layer_plain)",
                                   &BlurLayerZero);
             blurZero.golden = "blur_layer_plain";
             blurZero.sameAs = "blur_layer_plain";
-            blurZero.sameTolerance = {1, 0.0, 1, 0.05};
             add("text", "text quads from an Alpha8 test atlas (grayscale text program, gamma / contrast composition) on dark and light", &Text);
             Scene& lcd = add("text_lcd", "sub-pixel text pages (dual-source blending) and their grayscale fallback inside glow layers", &TextLcd);
             lcd.needsDualSource = true;
