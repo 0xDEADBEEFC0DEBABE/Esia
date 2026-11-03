@@ -459,6 +459,49 @@ ESIA_TEST(Painter, LayersFadesAndStreaks)
     ESIA_CHECK(s.flags[0] == fx::kCaustic && s.fill0[3] == 1.0f && s.fill1[0] == -1.0f && s.misc[0] == 0.5f);
 }
 
+ESIA_TEST(Painter, BlurLayers)
+{
+    DrawList dl = MakeList();
+    PainterEnv env;
+    env.metricsScale = 2.0f;
+    Painter p(dl, Fx(env));
+    // radius 0 at opacity 1: the content as it is, no layer (the last frame of a blur-in)
+    p.BeginBlurLayer(0.0f);
+    p.Rect(Rect(10, 10, 20, 20), Style().Fill(Color::White()));
+    p.EndBlurLayer();
+    ESIA_CHECK(dl.Layers().empty());
+    // radius 0 below opacity 1: a layer, faded as one
+    p.BeginBlurLayer(0.0f, 0.5f);
+    p.EndBlurLayer();
+    // the radius at the metrics scale and under the scales pushed, as the shapes' lengths; the mask pushed at begin
+    p.PushMask(Rect(50, 60, 250, 160), 12);
+    p.PushScale(Vec2(100, 100), 1.5f);
+    p.BeginBlurLayer(4.0f, 2.0f);
+    p.Rect(Rect(80, 80, 120, 120), Style().Fill(Color::White()));
+    p.EndBlurLayer();
+    p.PopScale();
+    p.PopMask();
+    ESIA_CHECK(dl.Layers().size() == 2);
+    const fx::LayerParams& faded = dl.Layers()[0];
+    ESIA_CHECK(faded.kind == fx::LayerKind::Blur && faded.radius == 0.0f && faded.opacity == 0.5f && faded.maskRadius < 0.0f);
+    const fx::LayerParams& b = dl.Layers()[1];
+    ESIA_CHECK(b.kind == fx::LayerKind::Blur && b.radius == 12.0f && b.opacity == 1.0f);   // 4 x 2 x 1.5; opacity at most 1
+    ESIA_CHECK(b.mask[0] == 50 && b.mask[1] == 60 && b.mask[2] == 250 && b.mask[3] == 160 && b.maskRadius == 12 && b.maskSmoothing == 0.6f);
+    int begins = 0, ends = 0;
+    for (const DrawCmd& c : dl.Commands())
+    {
+        if (c.kind == DrawCmdKind::LayerBegin)
+            ++begins;
+        if (c.kind == DrawCmdKind::LayerEnd)
+            ++ends;
+    }
+    ESIA_CHECK(begins == 2 && ends == 2);   // an end only where a layer began
+    // glow layers stay glow layers
+    p.BeginGlowLayer(Color::White(), 4.0f);
+    p.EndGlowLayer();
+    ESIA_CHECK(dl.Layers().size() == 3 && dl.Layers()[2].kind == fx::LayerKind::Glow);
+}
+
 namespace
 {
     // FakeText with the coverage tiles of flat drawing: they sit on the text's texture (42), as in the FreeType system

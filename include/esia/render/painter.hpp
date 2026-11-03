@@ -329,6 +329,17 @@ namespace esia
         void BeginGlowLayer(Color tint, float radius, float intensity = 1.0f, float contentOpacity = 1.0f);
         void EndGlowLayer();
 
+        // Everything drawn between Begin/EndBlurLayer is drawn offscreen, then composed blurred - CSS's filter:
+        // blur(radius) and opacity on a group: a gaussian of standard deviation `radius` (UI units at scale 1, under
+        // the scales pushed now as the shapes are), color and coverage alike, no light added; then `opacity` on the
+        // whole (shapes that overlap do not show through each other). The result stays inside the clip and the mask
+        // pushed at Begin, as the shapes do. Radius 0 at opacity 1 draws the content as it is, with no layer; from
+        // there the blur grows continuously - blur-in animations end on exactly the plain drawing - up to about 30
+        // render-target pixels, where it stays. Layers do not nest: one begun inside another (blur or glow) draws its
+        // content into the outer one as it is.
+        void BeginBlurLayer(float radius, float opacity = 1.0f);
+        void EndBlurLayer();
+
         // What this draw list draws until EndEdgeFade fades out towards the top / bottom edge of `region`, over
         // `top` / `bottom` UI units (0 = that edge stays hard). Real transparency, no color is added.
         void BeginEdgeFade(const esia::Rect& region, float top, float bottom);
@@ -397,6 +408,8 @@ namespace esia
         Stack<Vec2, 8> scaleOrigin_;
         Stack<float, 8> scaleValue_;
         Stack<std::size_t, 8> scaleVtxStart_, scaleQuadStart_;
+        int blurDepth_ = 0;
+        Stack<bool, 8> blurLayer_;   // BeginBlurLayer began a layer (not: radius 0 at opacity 1)
         float mergeRadius_ = 0.0f;
         float mergeSmooth_ = -1.0f;
         std::uint64_t tileGeneration_ = 0;   // flat drawing: env_.text->TileGeneration(), asked once (0: not yet)

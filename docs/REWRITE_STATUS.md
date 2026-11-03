@@ -42,6 +42,11 @@ screenshots.
 multi-line editor and docking, with the `workbench` example; the X11 frame as a library; Android with OpenGL ES and
 Vulkan; COLR color emoji; scrolling by touch from any item.
 
+**Blur layers** (2026-11-03, in Esia): `Painter::BeginBlurLayer` / `EndBlurLayer` draw a group blurred - CSS's
+`filter: blur()` and `opacity` on it - for blur-in and fade-in animations: color and coverage blurred alike, nothing
+added, the gaussian growing from the plain drawing without a step. Every other image of every backend byte for byte as
+before.
+
 **Several strokes as one shape** (2026-10-31, in Esia): `Painter::Polylines` draws strokes that cross or touch - a
 handwriting's crossed t, a capital's bar running on into its stem - as one surface: one glass, one shadow, one glow,
 where shapes drawn one after another lie over each other, rim over rim. Every other image of every backend byte for
@@ -182,6 +187,7 @@ shared their scroll state, menus too long for the display or creeping by a fract
 window, the wheel changing areas halfway, a field pushing the button after it out of view, a selection that stayed
 on a row index.
 
+* [Blur layers](#blur-layers)
 * [Several strokes as one shape](#several-strokes-as-one-shape)
 * [Open paths take only the points that can be nearest](#open-paths-take-only-the-points-that-can-be-nearest)
 * [Draw lists recorded and appended again](#draw-lists-recorded-and-appended-again)
@@ -229,6 +235,37 @@ on a row index.
 * [7. Building and testing](#7-building-and-testing)
 * [8. Round 1: the core](#8-round-1-the-core)
 * [9. Next](#9-next)
+
+## Blur layers
+
+UIs bring content in from a blur (React Bits' Blur Text, Fade Content). The layers Esia had bloom: their composite adds
+light and keeps the sharp content's coverage, so on a light background the halo all but vanishes and the content itself
+never blurs. Glass blurs only what lies behind it (2026-11-03).
+
+### What changed
+
+* `Painter::BeginBlurLayer(radius, opacity)` / `EndBlurLayer()` on the glow layers' offscreen layer and pyramid
+  (`fx::LayerParams::kind`: Glow or Blur). `radius` is the gaussian's standard deviation (UI units at the metrics scale,
+  under the scales pushed), `opacity` the group's. Radius 0 at opacity 1 makes no layer: a blur-in ends on exactly the
+  plain drawing. A layer begun inside another draws into the outer one.
+* `BlurComposite` (`BlurCompositePS`): the two pyramid levels around the standard deviation, mixed so that their
+  variance is the gaussian's. Each level's own was measured by running the 13-tap downsamples and the B-spline read on
+  an impulse (1.756, 3.753, 7.621, 15.3, 30.628 px, the same at every phase); level 0 is the sharp layer. Then the
+  opacity and the rounded mask pushed at Begin.
+* Planning: the region reaches 3 standard deviations + 8 px past the content, and the result stays inside the union of
+  the clips of what the layer holds. Content is clipped and masked as it is drawn, before the blur.
+* A device without `BlurComposite` draws a blur layer's content straight onto the target
+  (`RenderStats::directBlurLayers`); `RenderStats::blurLayers` counts the composed ones.
+
+### Verified
+
+* Byte for byte: the existing scenes on Direct3D 9, 10, 11, 12, OpenGL and Vulkan (245 images) against the build
+  before. New scenes `blur_layer` (no blur to a wide one, a faded one, dark and light), `blur_layer_clip` (a clip, a
+  rounded mask, a scale, a scrolled view's rows under an edge fade, blurred text over glass) and `blur_layer_zero` (next
+  to no blur in a layer: within 1/255 of `blur_layer_plain`, the same content drawn plainly). Goldens from Direct3D 11;
+  the four Direct3D backends within 1/255 of each other, OpenGL and Vulkan within 3/255.
+* `Painter.BlurLayers`, `FramePlan.BlurLayersReachTheirGaussianInsideTheirClip`, `Renderer.BlurLayer` (the fallback
+  included). MSVC `/W4 /WX`, the GNU flags on the changed files.
 
 ## Several strokes as one shape
 

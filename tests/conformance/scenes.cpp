@@ -481,6 +481,126 @@ namespace esia::conformance
             p.Polyline(pts, 6, 3.0f, Style().Fill(kGreen).Glow(kGreen, 10, 0.9f), PolylineFlags_Smooth);
         }
 
+        // What blur layers blur: a card, a translucent circle over it, text and a line, in dark or light ink
+        void BlurContent(Painter& p, DrawList& dl, TextureId atlas, Vec2 o, bool light)
+        {
+            const Color ink = light ? Color::Black() : Color::White();
+            p.Rect(Rect(o.x, o.y, o.x + 70, o.y + 40), Style().Fill(light ? kOrange : kBlue).Radius(10));
+            const Color c = light ? kTeal : kPink;
+            p.Circle(Vec2(o.x + 70, o.y + 12), 14, Style().Fill(Color(c.r, c.g, c.b, 0.7f)));
+            Glyphs(dl, atlas, Vec2(o.x + 8, o.y + 9), "abcd", 22, ink);
+            p.Line(Vec2(o.x + 96, o.y + 6), Vec2(o.x + 130, o.y + 38), 3, Style().Fill(ink));
+        }
+
+        // Blur layers (CSS's filter: blur() on a group) from no blur to a wide one, and a faded one, on dark and light
+        void BlurLayers(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl, Env());
+            const TextureId atlas = MakeAtlas(f.textures);
+            p.Rect(Rect(0, 0, 160, 240), Style().Fill(Color::Hex(0x1C1C1E)));
+            p.Rect(Rect(160, 0, 320, 240), Style().Fill(Color::Hex(0xF2F2F7)));
+            const float radius[4] = {0.0f, 2.0f, 5.0f, 10.0f};
+            const float opacity[4] = {1.0f, 1.0f, 1.0f, 0.6f};
+            for (int col = 0; col < 2; ++col)
+                for (int row = 0; row < 4; ++row)
+                {
+                    p.BeginBlurLayer(radius[row], opacity[row]);
+                    BlurContent(p, dl, atlas, Vec2(12.0f + 160.0f * (float)col, 10.0f + 58.0f * (float)row), col == 1);
+                    p.EndBlurLayer();
+                }
+        }
+
+        // Blur layers where a clip, a rounded mask and a scale are, rows of a scrolled view under an edge fade (a layer
+        // each), and blurred text over glass
+        void BlurLayersClipped(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl, Env());
+            const TextureId atlas = MakeAtlas(f.textures);
+            p.Rect(Rect(0, 0, 320, 240), Style().Fill(Paint::Linear(Color::Hex(0x2C2C2E), Color::Hex(0x636366), 90)));
+            // the clip cuts the content and its blur alike
+            p.PushClip(Rect(10, 10, 100, 110));
+            p.BeginBlurLayer(6);
+            p.Rect(Rect(30, 0, 120, 60), Style().Fill(kBlue).Radius(12));
+            Glyphs(dl, atlas, Vec2(20, 70), "abcd", 24, Color::White());
+            p.EndBlurLayer();
+            p.PopClip();
+            // the mask: rounded corners on the blurred result
+            p.PushMask(Rect(115, 10, 205, 110), 24);
+            p.BeginBlurLayer(6);
+            p.Rect(Rect(105, 30, 215, 90), Style().Fill(kOrange));
+            Glyphs(dl, atlas, Vec2(125, 45), "efgh", 24, Color::Black());
+            p.EndBlurLayer();
+            p.PopMask();
+            // under a scale: the content and its blur scaled together
+            p.PushScale(Vec2(265, 60), 1.4f);
+            p.BeginBlurLayer(3);
+            p.Rect(Rect(230, 35, 300, 85), Style().Fill(kPink).Radius(10));
+            Glyphs(dl, atlas, Vec2(238, 48), "ab", 22, Color::White());
+            p.EndBlurLayer();
+            p.PopScale();
+            // a scrolled view (rows cut at both edges) under an edge fade
+            const Rect view(10, 125, 150, 230);
+            p.PushClip(view);
+            p.BeginEdgeFade(view, 20, 20);
+            for (int i = 0; i < 5; ++i)
+            {
+                const float y = view.min.y - 12.0f + (float)i * 28.0f;
+                p.BeginBlurLayer(1.0f + (float)i, 1.0f - 0.1f * (float)i);
+                p.Rect(Rect(view.min.x + 6, y, view.max.x - 6, y + 22), Style().Fill(i % 2 ? kIndigo : kTeal).Radius(6));
+                Glyphs(dl, atlas, Vec2(view.min.x + 14, y + 4), "abcd", 14, Color::White());
+                p.EndBlurLayer();
+            }
+            p.EndEdgeFade();
+            p.PopClip();
+            // over glass
+            p.Rect(Rect(165, 125, 310, 230), Style().Radius(18).Glass(Glass(8, 8, 18)));
+            p.BeginBlurLayer(4, 0.8f);
+            Glyphs(dl, atlas, Vec2(182, 160), "hgfe", 28, Color::White());
+            p.EndBlurLayer();
+        }
+
+        // What blur_layer_zero draws in a layer of almost no blur, drawn plainly: overlapping translucent shapes and text
+        void BlurZeroContent(Painter& p, DrawList& dl, TextureId atlas)
+        {
+            for (int col = 0; col < 2; ++col)
+            {
+                const float x = 12.0f + 160.0f * (float)col;
+                const Color ink = col ? Color::Black() : Color::White();
+                p.Rect(Rect(x, 20, x + 110, 90), Style().Fill(Color(kBlue.r, kBlue.g, kBlue.b, 0.6f)).Radius(14));
+                p.Circle(Vec2(x + 90, 40), 30, Style().Fill(Color(kPink.r, kPink.g, kPink.b, 0.5f)));
+                p.Rect(Rect(x + 20, 60, x + 130, 130), Style().Fill(Color(kGreen.r, kGreen.g, kGreen.b, 0.4f)).Radius(8).Stroke(2, ink));
+                Glyphs(dl, atlas, Vec2(x + 6, 150), "abcdefgh", 18, ink);
+                p.Line(Vec2(x, 200), Vec2(x + 130, 230), 2.5f, Style().Fill(Color(ink.r, ink.g, ink.b, 0.8f)));
+            }
+        }
+
+        void BlurZeroBackground(Painter& p)
+        {
+            p.Rect(Rect(0, 0, 160, 240), Style().Fill(Color::Hex(0x1C1C1E)));
+            p.Rect(Rect(160, 0, 320, 240), Style().Fill(Color::Hex(0xF2F2F7)));
+        }
+
+        void BlurLayerPlain(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl, Env());
+            BlurZeroBackground(p);
+            BlurZeroContent(p, dl, MakeAtlas(f.textures));
+        }
+
+        void BlurLayerZero(SceneFrame& f)
+        {
+            DrawList& dl = f.NewList();
+            Painter p(dl, Env());
+            BlurZeroBackground(p);
+            const TextureId atlas = MakeAtlas(f.textures);
+            p.BeginBlurLayer(1e-4f);   // a layer, and next to no blur: what the last frames of a blur-in draw
+            BlurZeroContent(p, dl, atlas);
+            p.EndBlurLayer();
+        }
+
         void Text(SceneFrame& f)
         {
             DrawList& dl = f.NewList();
@@ -1159,6 +1279,20 @@ namespace esia::conformance
             Scene& glow = add("glow_layer", "glow layers: region clears, bloom pyramid, tinted / untinted composite, text and polylines in layers", &GlowLayers);
             glow.tolerance.channel = 10;
             glow.tolerance.fraction = 0.01;
+            add("blur_layer", "blur layers (filter: blur() on a group): no blur to a wide one, a faded one, on dark and light - color and coverage "
+                              "blurred alike, no light added",
+                &BlurLayers)
+                .tolerance = glassTolerance;
+            add("blur_layer_clip", "blur layers inside a clip, a rounded mask and a scale, a layer for each row of a scrolled view under an edge "
+                                   "fade, blurred text over glass",
+                &BlurLayersClipped)
+                .tolerance = glassTolerance;
+            add("blur_layer_plain", "what blur_layer_zero draws in a layer, drawn plainly: overlapping translucent shapes, text", &BlurLayerPlain);
+            Scene& blurZero = add("blur_layer_zero", "a blur layer of next to no blur: the content's own pixels (within 1/255 of blur_layer_plain)",
+                                  &BlurLayerZero);
+            blurZero.golden = "blur_layer_plain";
+            blurZero.sameAs = "blur_layer_plain";
+            blurZero.sameTolerance = {1, 0.0, 1, 0.05};
             add("text", "text quads from an Alpha8 test atlas (grayscale text program, gamma / contrast composition) on dark and light", &Text);
             Scene& lcd = add("text_lcd", "sub-pixel text pages (dual-source blending) and their grayscale fallback inside glow layers", &TextLcd);
             lcd.needsDualSource = true;

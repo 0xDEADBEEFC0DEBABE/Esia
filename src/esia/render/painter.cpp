@@ -2136,6 +2136,41 @@ namespace esia
 
     void Painter::EndGlowLayer() { dl_->EndLayer(); }
 
+    void Painter::BeginBlurLayer(float radius, float opacity)
+    {
+        ESIA_ASSERT(blurDepth_ < 8);
+        const float sigma = std::max(radius, 0.0f) * env_.metricsScale * ScaleFactor();
+        const float a = Saturate(opacity);
+        // nothing to blur and nothing to fade: the content as it is, no layer (the last frame of a blur-in)
+        const bool layer = blurDepth_ < 8 && (sigma > 0.0f || a < 1.0f);
+        if (blurDepth_ < 8)
+            blurLayer_[blurDepth_] = layer;
+        ++blurDepth_;
+        if (!layer)
+            return;
+        fx::LayerParams p{};
+        p.kind = fx::LayerKind::Blur;
+        p.radius = sigma;
+        p.opacity = a;
+        if (maskDepth_ > 0)
+        {
+            SetRect(p.mask, masks_[maskDepth_ - 1]);
+            p.maskRadius = std::max(maskRadius_[maskDepth_ - 1], 0.0f);
+            p.maskSmoothing = env_.cornerSmoothing;
+        }
+        dl_->BeginLayer(p);
+    }
+
+    void Painter::EndBlurLayer()
+    {
+        ESIA_ASSERT(blurDepth_ > 0);
+        if (blurDepth_ <= 0)
+            return;
+        --blurDepth_;
+        if (blurDepth_ < 8 && blurLayer_[blurDepth_])
+            dl_->EndLayer();
+    }
+
     void Painter::BeginEdgeFade(const esia::Rect& region, float top, float bottom)
     {
         dl_->BeginFade(fx::FadeParams{region.min.y, region.max.y, std::max(top, 0.0f), std::max(bottom, 0.0f)});

@@ -42,6 +42,8 @@ namespace esia::shaders
         extern const unsigned char spirv_QuadShapeLcd_ps_spv[];
         extern const unsigned char spirv_QuadShapeLcdGray_vs_spv[];
         extern const unsigned char spirv_QuadShapeLcdGray_ps_spv[];
+        extern const unsigned char spirv_BlurComposite_vs_spv[];
+        extern const unsigned char spirv_BlurComposite_ps_spv[];
         extern const unsigned char glsl330_UiGeometry_vs_glsl[];
         extern const unsigned char glsl330_UiGeometry_ps_glsl[];
         extern const unsigned char glsl330_TextGray_vs_glsl[];
@@ -78,6 +80,8 @@ namespace esia::shaders
         extern const unsigned char glsl330_QuadShapeLcd_ps_glsl[];
         extern const unsigned char glsl330_QuadShapeLcdGray_vs_glsl[];
         extern const unsigned char glsl330_QuadShapeLcdGray_ps_glsl[];
+        extern const unsigned char glsl330_BlurComposite_vs_glsl[];
+        extern const unsigned char glsl330_BlurComposite_ps_glsl[];
         extern const unsigned char essl300_UiGeometry_vs_essl[];
         extern const unsigned char essl300_UiGeometry_ps_essl[];
         extern const unsigned char essl300_TextGray_vs_essl[];
@@ -114,6 +118,8 @@ namespace esia::shaders
         extern const unsigned char essl300_QuadShapeLcd_ps_essl[];
         extern const unsigned char essl300_QuadShapeLcdGray_vs_essl[];
         extern const unsigned char essl300_QuadShapeLcdGray_ps_essl[];
+        extern const unsigned char essl300_BlurComposite_vs_essl[];
+        extern const unsigned char essl300_BlurComposite_ps_essl[];
         extern const unsigned char msl_UiGeometry_vs_metal[];
         extern const unsigned char msl_UiGeometry_ps_metal[];
         extern const unsigned char msl_TextGray_vs_metal[];
@@ -150,6 +156,8 @@ namespace esia::shaders
         extern const unsigned char msl_QuadShapeLcd_ps_metal[];
         extern const unsigned char msl_QuadShapeLcdGray_vs_metal[];
         extern const unsigned char msl_QuadShapeLcdGray_ps_metal[];
+        extern const unsigned char msl_BlurComposite_vs_metal[];
+        extern const unsigned char msl_BlurComposite_ps_metal[];
     }
 
     namespace
@@ -172,6 +180,7 @@ namespace esia::shaders
         const TextureBinding kBind_glsl330_QuadShapeGray_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_glsl330_QuadShapeLcd_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_glsl330_QuadShapeLcdGray_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
+        const TextureBinding kBind_glsl330_BlurComposite_ps_glsl[] = {{"SPIRV_Cross_CombinedgTexgPoint", 0, 1}, {"SPIRV_Cross_CombinedgBackdrop0gLinear", 1, 0}, {"SPIRV_Cross_CombinedgBackdrop1gLinear", 2, 0}, {"SPIRV_Cross_CombinedgBackdrop2gLinear", 3, 0}, {"SPIRV_Cross_CombinedgBackdrop3gLinear", 4, 0}, {"SPIRV_Cross_CombinedgBackdrop4gLinear", 5, 0}, {"SPIRV_Cross_CombinedgBackdrop5gLinear", 6, 0}};
         const TextureBinding kBind_essl300_UiGeometry_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_essl300_TextGray_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_essl300_Fx_vs_essl[] = {{"SPIRV_Cross_CombinedgFxDataSPIRV_Cross_DummySampler", 7, 1}};
@@ -190,6 +199,7 @@ namespace esia::shaders
         const TextureBinding kBind_essl300_QuadShapeGray_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_essl300_QuadShapeLcd_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
         const TextureBinding kBind_essl300_QuadShapeLcdGray_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgLinear", 0, 0}};
+        const TextureBinding kBind_essl300_BlurComposite_ps_essl[] = {{"SPIRV_Cross_CombinedgTexgPoint", 0, 1}, {"SPIRV_Cross_CombinedgBackdrop0gLinear", 1, 0}, {"SPIRV_Cross_CombinedgBackdrop1gLinear", 2, 0}, {"SPIRV_Cross_CombinedgBackdrop2gLinear", 3, 0}, {"SPIRV_Cross_CombinedgBackdrop3gLinear", 4, 0}, {"SPIRV_Cross_CombinedgBackdrop4gLinear", 5, 0}, {"SPIRV_Cross_CombinedgBackdrop5gLinear", 6, 0}};
     }
 
     // spirv: FX instances in buffer storage
@@ -230,6 +240,8 @@ namespace esia::shaders
         {16, 1, "QuadLcdPS", blobs::spirv_QuadShapeLcd_ps_spv, 19172, false, nullptr, 0},
         {17, 0, "QuadShapeVS", blobs::spirv_QuadShapeLcdGray_vs_spv, 8324, false, nullptr, 0},
         {17, 1, "QuadLcdGrayPS", blobs::spirv_QuadShapeLcdGray_ps_spv, 14996, false, nullptr, 0},
+        {18, 0, "FullscreenVS", blobs::spirv_BlurComposite_vs_spv, 1640, false, nullptr, 0},
+        {18, 1, "BlurCompositePS", blobs::spirv_BlurComposite_ps_spv, 26708, false, nullptr, 0},
         {-1, 0, nullptr, nullptr, 0, false, nullptr, 0},
     };
 
@@ -271,6 +283,8 @@ namespace esia::shaders
         {16, 1, "QuadLcdPS", blobs::glsl330_QuadShapeLcd_ps_glsl, 16193, true, kBind_glsl330_QuadShapeLcd_ps_glsl, 1},
         {17, 0, "QuadShapeVS", blobs::glsl330_QuadShapeLcdGray_vs_glsl, 5981, true, nullptr, 0},
         {17, 1, "QuadLcdGrayPS", blobs::glsl330_QuadShapeLcdGray_ps_glsl, 13483, true, kBind_glsl330_QuadShapeLcdGray_ps_glsl, 1},
+        {18, 0, "FullscreenVS", blobs::glsl330_BlurComposite_vs_glsl, 489, true, nullptr, 0},
+        {18, 1, "BlurCompositePS", blobs::glsl330_BlurComposite_ps_glsl, 32677, true, kBind_glsl330_BlurComposite_ps_glsl, 7},
         {-1, 0, nullptr, nullptr, 0, false, nullptr, 0},
     };
 
@@ -312,6 +326,8 @@ namespace esia::shaders
         {16, 1, "QuadLcdPS", blobs::essl300_QuadShapeLcd_ps_essl, 16379, true, kBind_essl300_QuadShapeLcd_ps_essl, 1},
         {17, 0, "QuadShapeVS", blobs::essl300_QuadShapeLcdGray_vs_essl, 5528, true, nullptr, 0},
         {17, 1, "QuadLcdGrayPS", blobs::essl300_QuadShapeLcdGray_ps_essl, 13483, true, kBind_essl300_QuadShapeLcdGray_ps_essl, 1},
+        {18, 0, "FullscreenVS", blobs::essl300_BlurComposite_vs_essl, 492, true, nullptr, 0},
+        {18, 1, "BlurCompositePS", blobs::essl300_BlurComposite_ps_essl, 33423, true, kBind_essl300_BlurComposite_ps_essl, 7},
         {-1, 0, nullptr, nullptr, 0, false, nullptr, 0},
     };
 
@@ -353,6 +369,8 @@ namespace esia::shaders
         {16, 1, "QuadLcdPS", blobs::msl_QuadShapeLcd_ps_metal, 17165, true, nullptr, 0},
         {17, 0, "QuadShapeVS", blobs::msl_QuadShapeLcdGray_vs_metal, 6343, true, nullptr, 0},
         {17, 1, "QuadLcdGrayPS", blobs::msl_QuadShapeLcdGray_ps_metal, 14314, true, nullptr, 0},
+        {18, 0, "FullscreenVS", blobs::msl_BlurComposite_vs_metal, 796, true, nullptr, 0},
+        {18, 1, "BlurCompositePS", blobs::msl_BlurComposite_ps_metal, 31978, true, nullptr, 0},
         {-1, 0, nullptr, nullptr, 0, false, nullptr, 0},
     };
 
