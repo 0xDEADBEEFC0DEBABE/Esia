@@ -267,6 +267,14 @@ never blurs. Glass blurs only what lies behind it (2026-11-03).
 * `Painter.BlurLayers`, `FramePlan.BlurLayersReachTheirGaussianInsideTheirClip`, `Renderer.BlurLayer` (the fallback
   included). MSVC `/W4 /WX`, the GNU flags on the changed files.
 
+### Not done
+
+* Glass drawn inside a layer (blur or glow) refracts what lies behind the layer on the target, not what the layer drew
+  under it: a glass panel over content in the same layer shows its tint over what is behind the layer, and changes when
+  the layer ends (radius 0: no layer). Draw the glass's backdrop outside the layer, or the glass outside and only what
+  lies on it inside. Glass in a layer could capture the layer's content composed over the target instead (found by a
+  client's blur-in of a whole glass panel, 2026-11-03).
+
 ## Several strokes as one shape
 
 Strokes drawn one after another each have their own glass: where they cross, the one drawn later lies over the first

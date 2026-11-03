@@ -200,8 +200,9 @@ the current Direct3D backends:
   variance is the gaussian's (each level's own, after the 13-tap downsamples and the B-spline read, measured on an
   impulse: 1.76, 3.75, 7.62, 15.3, 30.6 px; level 0 is the sharp layer, so the blur starts from it without a step).
   Color and coverage are blurred alike, nothing is added; then the layer's opacity, the mask at its begin and the
-  union of its content's clips. Content is clipped and masked as it is drawn, before the blur. A backend whose
-  shader library has no `BlurComposite` draws a blur layer's content straight onto the target;
+  union of its content's clips. Content is clipped and masked as it is drawn, before the blur; glass in a layer
+  refracts what lies behind the layer on the target, not what the layer drew under it. A backend whose shader library
+  has no `BlurComposite` draws a blur layer's content straight onto the target;
 * **GPU profile categories**: runs of capture / layer / FX / FX-with-glass / geometry are timed without nesting
   (`rhi::ProfileCategory`, `RenderStats::gpu`);
 * passes start lazily (a capture or a layer ends the current pass, and nothing is loaded / stored again until
